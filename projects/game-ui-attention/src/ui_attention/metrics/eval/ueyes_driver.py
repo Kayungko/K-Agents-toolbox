@@ -408,11 +408,12 @@ class SplitsFile:
         return [e["image_id"] for e in self.entries if e["split"] == split]
 
     def to_dict(self) -> dict[str, Any]:
+        """序列化（**确定性**：不含时间戳——同内容跨重跑文件字节一致，sha256 稳定，
+        冻结哈希才可审计/可比对；生成时刻记录于 summary.json 而非冻结文件内）。"""
         return {
             "schema": "game-ui-attention-splits/v1",
             "protocol_version": self.protocol_version,
             "method": self.method,
-            "generated_at_utc": self.generated_at_utc,
             "notes": list(self.notes),
             "images": [dict(e) for e in self.entries],
         }

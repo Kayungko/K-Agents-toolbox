@@ -139,13 +139,33 @@ class CenterBiasBaseline:
         }
 
     def save(self, path: str | Path) -> str:
-        """落盘 npz（直方图 + 参数 + 源划分哈希 + 注视计数）；返回文件 sha256。"""
+        """落盘 npz（直方图 + 参数 + 源划分哈希 + 注视计数）；返回文件 sha256。
+
+        **确定性字节**：手工构造 zip 并使用固定条目时间戳（1980-01-01）——
+        np.savez 默认把当前时间写入 zip 条目导致同内容重跑哈希漂移，
+        破坏"版本化+哈希"的可审计性（2026-09-11 UEyes 实跑发现）。
+        产物仍是标准 npz（np.load 直接可读）。
+        """
+        import io
+        import zipfile
+
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
         params = json.dumps(self.params_dict(), sort_keys=True, ensure_ascii=False)
-        # params 以 unicode 字符串数组存储（避免 object dtype 强制 allow_pickle）
-        np.savez(p, histogram=self.histogram, params=np.array(params))
-        return hashlib.sha256(p.read_bytes()).hexdigest()
+
+        def _npy_bytes(arr: np.ndarray) -> bytes:
+            buf = io.BytesIO()
+            np.save(buf, arr, allow_pickle=False)
+            return buf.getvalue()
+
+        blob = io.BytesIO()
+        with zipfile.ZipFile(blob, "w", zipfile.ZIP_STORED) as zf:
+            # params 以 unicode 字符串数组存储（避免 object dtype 强制 allow_pickle）
+            for name, arr in (("histogram.npy", self.histogram), ("params.npy", np.array(params))):
+                zf.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), _npy_bytes(arr))
+        data = blob.getvalue()
+        p.write_bytes(data)
+        return hashlib.sha256(data).hexdigest()
 
     @classmethod
     def load(cls, path: str | Path) -> tuple[CenterBiasBaseline, str]:

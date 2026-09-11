@@ -215,6 +215,37 @@ def test_splits_fallback_hash_deterministic(dataset):
         drv.SplitsFile.build(metas_no_split, protocol_version="r2-v0.1", allow_fallback=False)
 
 
+def test_splits_file_bytes_deterministic_across_rebuilds(dataset, tmp_path):
+    """冻结哈希跨重跑稳定：同内容 splits 文件字节一致（时间戳不入冻结文件）。"""
+    layout = drv.discover_layout(dataset.root)
+    metas = drv.discover_image_paths(layout, drv.load_info_csv(layout.info_csv))
+    s1 = drv.SplitsFile.build(metas, protocol_version="r2-v0.1")
+    s2 = drv.SplitsFile.build(metas, protocol_version="r2-v0.1")
+    sha1 = s1.write(tmp_path / "a.json")
+    sha2 = s2.write(tmp_path / "b.json")
+    assert sha1 == sha2
+    assert (tmp_path / "a.json").read_bytes() == (tmp_path / "b.json").read_bytes()
+    # load 仍可用（generated_at_utc 不在文件内，字段回落空串）
+    loaded = drv.SplitsFile.load(tmp_path / "a.json", verify_sha256=sha1)
+    assert loaded.generated_at_utc == ""
+
+
+def test_cb_save_bytes_deterministic(tmp_path):
+    """CB npz 确定性字节：手工 zip 固定条目时间戳，同内容重存哈希一致。"""
+    from ui_attention.metrics.eval.baselines import CenterBiasBaseline, CenterBiasFitInput
+    from ui_attention.metrics.eval.groundtruth import FixationSet
+
+    fix = FixationSet(points=np.array([[10.0, 10.0], [20.0, 30.0]] * 10), weights=np.ones(20))
+    cb = CenterBiasBaseline.fit([CenterBiasFitInput(shape=(60, 80), fixations=fix)], source_split_hash="h" * 64)
+    sha_a = cb.save(tmp_path / "cb_a.npz")
+    sha_b = cb.save(tmp_path / "cb_b.npz")
+    assert sha_a == sha_b
+    assert (tmp_path / "cb_a.npz").read_bytes() == (tmp_path / "cb_b.npz").read_bytes()
+    loaded, sha_l = CenterBiasBaseline.load(tmp_path / "cb_a.npz")
+    assert sha_l == sha_a
+    assert np.array_equal(loaded.histogram, cb.histogram)
+
+
 # ---------------------------------------------------------------------------
 # Part 3：坐标映射与真值重建
 # ---------------------------------------------------------------------------
