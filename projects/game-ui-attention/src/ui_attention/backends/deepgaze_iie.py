@@ -55,6 +55,24 @@ image 违约 → INVALID_IMAGE；profile 问题 → PROFILE_NOT_REGISTERED；
 Linardos, A., Kümmerer, M., Press, O., & Bethge, M. (2021). Calibrated
 prediction in and out-of-domain for state-of-the-art saliency modeling.
 arXiv:2105.12441.
+
+手动安装步骤（L2 裁定 2026-09-11：**不进 pyproject extras**——G1 许可未闭合、
+该线永远不可打包，git URL 进入依赖清单会污染未来打包面；仅文档化手动安装，
+由 venv 维护者 C2 执行）::
+
+    # 在项目根目录，使用项目 venv（pip 缓存已重定向到 local-data/cache/pip）
+    .venv\\Scripts\\python.exe -m pip install torch==2.14.0 torchvision==0.29.0 boltons==26.2.0
+    .venv\\Scripts\\python.exe -m pip install "git+https://github.com/matthias-k/DeepGaze@c7db17e2d1d7ea6468ffdee2cfaddf141095dcff"
+
+- 用途声明：**仅限内部研究评估（internal-eval）**，作为 foveacast 的通用域
+  对照基线；禁止打包、分发、商用（一级总控 G1' 批准 2026-09-11）。
+- 许可缺口提示：G1（DeepGaze 代码与权重无任何许可声明，Issue #15 open
+  0 评论）、G2（ShapeNetC 骨干 bitbucket 权重条款未声明，其权重已含于
+  deepgaze2e.pth）、G5（MIT1003 等训练数据条款未逐一核实）。缺口未闭合前
+  本线产物不得进入任何对外交付面。
+- 安装后验证：``torch.version.cuda is None``（CPU wheel，本机实测 2.14.0+cpu）；
+  权重为独立显式下载步骤（model-cache/deepgaze/，本地 sha256 登记，见
+  PROVENANCE.json）。
 """
 
 from __future__ import annotations
@@ -273,7 +291,11 @@ class DeepGazeIIEBackend:
         except ImportError as exc:
             raise WeightNotReadyError(
                 f"torch not importable: {type(exc).__name__}",
-                {"hint": "install extras [deepgaze] (torch==2.14.0 CPU, torchvision==0.29.0)"},
+                {
+                    "hint": "manual install required (not in pyproject extras by L2 ruling): "
+                    "pip install torch==2.14.0 torchvision==0.29.0 boltons==26.2.0 + "
+                    "deepgaze_pytorch@git pin c7db17e2 — see module docstring 手动安装步骤",
+                },
                 reason="dependency_missing",
             ) from exc
         self._torch = torch
