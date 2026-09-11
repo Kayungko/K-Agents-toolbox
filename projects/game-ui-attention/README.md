@@ -30,6 +30,7 @@
 | [实施计划](docs/implementation-plan.md) | 阶段、交付物、依赖和完成标准 |
 | [验证方案](docs/validation-plan.md) | 工程正确性、效果验证与证据边界 |
 | [来源与选型记录](docs/sources-and-decisions.md) | 公开来源、许可待核实项与设计决策 |
+| [分级执行计划](docs/orchestration-plan.md) | 一级/二级总控职责、子任务分工和阶段验收 |
 
 ## 当前进展
 
