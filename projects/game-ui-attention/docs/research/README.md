@@ -19,15 +19,15 @@
 - 既有方案文档（technical-design / data-contract / implementation-plan / validation-plan / sources-and-decisions）的接口锁定更新：待第一波收敛后由 L2 串行处理。
 - README 导航与真实状态更新、.gitignore 追加、全部本地提交。
 
-## 第二波（准备中）
+## 第二波（实现，2026-09-11 派发）
 
-第一波已于 2026-09-11 全部验收。L2 正在执行接口锁定（串行更新五份既有方案文档，吸收 R1 短名单、R2 协议与 R3 环境方案），随后依赖驱动派发实现线，最多三条并行；目录所有权以 R3 锁定的工程布局（runtime-feasibility.md §3）为准：
+接口已锁定（G0 提交）；共享 venv 基础设施已由 L2 预建（Python 3.12.10，numpy/pillow/scipy/onnxruntime/pytest/ruff 实装，缓存重定向到忽略目录）。三线并行、目录所有权不重叠（全文见 [implementation-plan.md](../implementation-plan.md) 所有权表）：
 
-| 代号 | 范围 | 前置条件 |
-| --- | --- | --- |
-| C1 | 契约 schema、AOI、概率统计、错误语义、评估脚本；共享文件（pyproject/cli.py/errors.py/fixtures）唯一持有者 | L2 完成接口锁定 |
-| C2 | 后端隔离环境（venv py3.12+缓存重定向）、foveacast ONNX 加载/推理（路线 A，<100MB 无需审批）、来源哈希与缓存 | 接口锁定；路线 B（DeepGaze）另待一级总控裁决 G1 |
-| C3 | 本地报告、区域导出、A/B 共用色阶 | C1 输出契约冻结 |
-| Skill | 原创 game-ui-attention Skill 封装 | 工程闭环（G1）验收后 |
+| 代号 | 范围 | 独占产物 | 状态 |
+| --- | --- | --- | --- |
+| C1 | 契约 schema、AOI、概率统计、错误语义、评估脚本；共享文件（pyproject/cli.py/errors.py/fixtures）唯一持有者 | src/ui_attention/{contracts,aoi,metrics}/、cli.py、errors.py、imaging.py、pyproject.toml、tests/fixtures/ | 进行中（两阶段回报：contracts 完成即报） |
+| C2 | 后端隔离环境维护、foveacast ONNX 下载校验/注册/doctor/推理适配、运行实测 | src/ui_attention/backends/、model-cache/（忽略） | 进行中（仅 3s FP16 单文件 53.9MB 已批） |
+| C3 | 本地报告、区域导出、A/B 共用色阶、HTML 安全渲染 | src/ui_attention/report/ | 进行中 |
+| Skill | 原创 game-ui-attention Skill 封装 | 待定 | 未派发（G1 工程闭环验收后） |
 
-许可门禁不变：许可不明确的后端不得打包或使用（DeepGaze 仅限内部评估且待裁决）；该阻塞不阻止模型无关的统计、报告与评估代码推进。UEyes 数据集（12.9GB）下载待一级总控批准，获批前评估脚本用合成数据自测。
+许可门禁不变：DeepGaze 线待一级总控 G1 裁决（C2 禁止安装 torch）；UEyes 12.9GB 下载待批准（C1 eval 以合成数据自测）；跨线整合与 tests/integration/ 由 L2 串行处理。
