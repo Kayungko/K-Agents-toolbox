@@ -29,6 +29,11 @@ build/
 *.pt
 *.ckpt
 *.safetensors
+# Model interchange & offline package formats outside ignored dirs (R3 建议，G0 接口锁定采纳)
+*.onnx
+*.hdf5
+*.h5
+*.whl
 
 # OS/editor files
 .DS_Store

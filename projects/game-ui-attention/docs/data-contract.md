@@ -44,18 +44,46 @@ ui-attention compare --before <run-A> --after <run-B> --out <new-run-directory>
 - 导入设计节点时附加 source reference 和实际坐标变换记录；不得仅凭节点名称关联截图。
 - 修改标注的独立 regions 文件必须携带对应图片 SHA-256，防止应用到其他图片。
 
-## 3. 后端接口
+## 3. 后端接口（G0 冻结签名，2026-09-11）
+
+本节为 C1（contracts/ 定义）与 C2（backends/ 实现）之间的冻结接口；任何签名变更必须递增 `schema_version` 并经二级总控重新冻结，实现线不得单方面改动。
 
 ```text
 describe() -> BackendInfo
 predict(image, resolved_profile) -> PredictionResult
 ```
 
-`BackendInfo` 包含后端 ID、版本、模型能力（空间密度/厂商分数/时间预测等）、设备要求、许可核查状态。
+约定（Python 类型口径，实现于 `contracts/backend.py`）：
 
-`PredictionResult` 显式声明数据语义 `log_density | probability_density | vendor_metrics`。空间密度附带形状和有效画面映射；厂商指标保存原名称和语义，不强制转换成 probability_mass。时序能力不属于第一版消费范围。
+- `predict(image, resolved_profile)` 的 `image` 为方向已处理的原图 `numpy.ndarray`，RGB、`uint8`、形状 `(H, W, 3)`；缩放、均值减除等模型侧预处理由后端按 `resolved_profile` 内部执行并写入 `shape_mapping`，调用方不得预处理（foveacast 的均值减除在图内完成，见技术方案 §3）。
+- `resolved_profile` 为登记 profile 的解析结果（见下），含预处理参数、可选 centerbias 引用、观看条件与全部配置哈希；后端拒绝未登记或运行时改写的 profile（退出码 3）。
 
-分析记录必须包含实际执行的后端配置，不能只保存请求中的别名。
+`BackendInfo` 字段（冻结）：
+
+| 字段 | 类型/取值 | 说明 |
+| --- | --- | --- |
+| backend_id | str | 如 `foveacast-onnx-3s`、`deepgaze-iie` |
+| version | str | 后端实现版本（独立于模型权重版本） |
+| capabilities | tuple[str] | `spatial_density` / `vendor_metrics` / `scanpath`；第一版只消费 `spatial_density` |
+| native_semantics | str | 原生输出语义：`log_density` \| `probability_density` \| `vendor_metrics` |
+| device_requirements | dict | `{"device": "cpu"\|"cuda", "min_free_vram_mb": int\|None}`；doctor 实测空闲显存后校验 |
+| license_status | dict | `{"code": "...", "weights": "...", "gaps": ["G1", ...], "cleared_for": "internal-eval"\|"packaged"}`；缺口编号沿用 sources-and-decisions |
+| weights | tuple[WeightRef] | 每项 `{name, source_url, sha256, size_bytes}`；doctor 校验实际文件哈希==登记值，不匹配退出码 3（MODEL_NOT_READY） |
+
+`PredictionResult` 字段（冻结）：
+
+| 字段 | 类型/取值 | 说明 |
+| --- | --- | --- |
+| semantics | str | 显式声明 `log_density` \| `probability_density` \| `vendor_metrics`；foveacast 适配层完成 sum=1 重归一化后声明 `probability_density`，DeepGaze IIE 原生 `log_density` |
+| array | numpy.ndarray | float64；空间图形状 `(h, w)`；不得为 8-bit 或量化存储 |
+| shape_mapping | dict | 原图尺寸 `(H, W)`、推理尺寸 `(h, w)`、缩放/填充参数与逆变换方法（对齐技术方案 §4.4-4.5） |
+| runtime | dict | `{"device", "precision", "elapsed_ms", "peak_mem_mb"}` 实测值，写入 analysis.json 的 runtime 字段 |
+| vendor_metrics | dict \| None | 仅 `vendor_metrics` 语义时保存原名称与语义，不强制转换成 probability_mass |
+| limitations | tuple[str] | 必须包含：相对量语义（如 min-max 跨图不可比）、分辨率上限（如 240×320）、训练分布边界（不含游戏 UI）等后端已知限制 |
+
+时序能力（scanpath）不属于第一版消费范围；SeekUI 类后端若未来立项，须以独立 backend_profile 与独立评估协议接入（D013）。
+
+**profile 登记（冻结规则）**：`backend_profile` 必须是 `backends/registry.py` 中已登记、不可在执行时静默改写的配置。登记名规范 `<backend>-<variant>-v<N>`（示例请求中的 `local-static-v1` 为虚构占位，首个真实登记预期为 `foveacast-onnx-3s-v1`）。登记项包含：backend_id+version、权重清单与哈希、预处理参数（目标尺寸、值域、均值处理）、centerbias 引用（可选，含来源与哈希）、观看条件假设（如 DeepGaze 的 35 px/dva 须标记实验假设）、全部配置的合成哈希。分析记录必须包含实际执行的后端配置解析结果，不能只保存请求中的别名。
 
 ## 4. 计算结果与证据
 

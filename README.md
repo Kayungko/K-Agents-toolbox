@@ -6,7 +6,7 @@
 
 | 项目 | 用途 | 当前状态 |
 | --- | --- | --- |
-| [Game UI Attention](projects/game-ui-attention/README.md) | 游戏 UI 视觉注意力预测、重点区域统计与视觉层级评审 | 方案阶段，尚未实现 |
+| [Game UI Attention](projects/game-ui-attention/README.md) | 游戏 UI 视觉注意力预测、重点区域统计与视觉层级评审 | G0 研究收敛完成，进入工程实现；尚无可运行代码 |
 
 ## 目录约定
 

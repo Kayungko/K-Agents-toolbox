@@ -40,17 +40,23 @@
 
 ## 3. 技术选型
 
-拟使用 Python、PyTorch、NumPy、Pillow。采用项目独立虚拟环境；在后端跑通后锁定实际兼容的 Python 与依赖版本，不用上游未设上限的依赖声明代替兼容性验证。
+（G0 接口锁定，2026-09-11：按第一波研究 R1/R3 结论更新；来源与许可证据见[来源与选型记录](sources-and-decisions.md) §1.2 与 [research/](research/README.md)。）
 
-| 候选 | 用途 | 当前限制 |
+拟使用 Python 3.12（项目独立 venv）、NumPy、Pillow、onnxruntime（主后端推理）。PyTorch 仅在 DeepGaze 内部对照线启用（待一级总控裁决 G1 后按中体量下载流程安装）。在后端跑通后锁定实际兼容的依赖版本（精确 pin + lock 文件），不用上游未设上限的依赖声明代替兼容性验证。
+
+| 候选 | 定位（G0 锁定） | 当前限制 |
 | --- | --- | --- |
-| DeepGaze IIE | 静态显著性基线候选 | 代码、权重和依赖许可待明确；游戏 UI 效果未验证 |
-| DeepGaze MSDB | 后续模型对比候选 | 需要显示/观看条件，不能从截图猜出 pixels per degree |
-| Attention Insight | 可选外部 API/MCP 后端 | 需要账户、额度及明确允许上传的数据范围；结果指标单独映射 |
+| foveacast-training v0.2.0 ONNX（UI 微调 MSI-Net） | **首选后端候选**（D011）：3s FP16 主用，1s/7s 作窗口敏感性分析；onnxruntime CPU | 输出为逐图 min-max 相对量，适配层须重归一化后声明 probability_density；输入 240×320 上限，小元素解析力受限；训练分布不含游戏 UI（效果未验证）；商用前需关闭 G3/G4/G8 上游链缺口 |
+| DeepGaze IIE | 通用域对照基线（**仅限内部研究评估，不打包不分发**） | 许可缺口 G1 待一级总控裁决；老 API（torch.hub v0.6.0 tag、pretrained=）× 新 torch 兼容性未验证（U1），开工前隔离验证；4 骨干集成 CPU 延迟风险最高（U5） |
+| DeepGaze MSDB | 后续域适配观察项，暂缓 | 需要 pixel_per_dva 观看条件（不得从截图猜测）；10 尺度前向计算重；许可同 G1 |
+| UEyes 数据集 + R2 评估协议 | **公开评估基准**（D012），非后端 | 12.9GB 下载待一级总控批准；普通 UI 数据结果不得外推为游戏 UI 结论 |
+| SeekUI / UMSI++ | 存档不选（D013/D014） | SeekUI：scanpath 时序语义与静态热图接口不兼容 + 许可三层未闭合（G7）；UMSI++：无 LICENSE（G6）+ TF1.14/CUDA9 老栈 |
+| VLM（候选 AOI + 解释辅助） | 辅助线，**不是显著性后端**（D015） | 零样本 VLM 与真人眼动仅中等一致（UIGaze 证据）；输出不得当眼动真值或热图来源 |
+| Attention Insight | 可选外部 API/MCP 后端（保留候选，未接入） | 需要账户、额度及明确允许上传的数据范围；结果指标单独映射 |
 
-DeepGaze 官方提供空间 log density 输出及中心偏置输入。参见[来源与选型记录](sources-and-decisions.md)。DeepGaze 尚未定为正式发布依赖；许可未闭合时不打包其代码或权重，先推进独立的统计、报告和后端接口。
+主后端输出语义与适配要求：foveacast ONNX 输入 `(N,3,240,320)` float32 RGB [0,255]（均值减除在图内完成，调用方不得预处理），输出 `(N,1,240,320)` 逐图 min-max [0,1]；适配层做 sum=1 重归一化后以 `probability_density` 语义进入统计管线，并在 profile/limitations 记录相对量语义与分辨率上限；后端实现运行时读取 ONNX session 元数据，不硬编码张量名（U8）。DeepGaze IIE 输出原生 `log_density`，显式 centerbias 输入，语义与第 7 节转换公式直接对应。
 
-GPU 优先；CPU 支持、延迟、峰值内存和显存通过本机实测决定。不得先写“秒级完成”或保证某档显卡能运行。
+GPU 优先策略调整为：**路线 A（ONNX CPU）先行**——本机无系统级 CUDA Toolkit，onnxruntime-gpu 首版不选（安装即改全局环境）；CPU 延迟、峰值内存通过本机实测决定是否需要 GPU 升级路线（CUDA wheel 属大体量，需一级总控批准）。不得先写“秒级完成”或保证某档显卡能运行。
 
 ## 4. 图像处理
 
@@ -70,6 +76,8 @@ GPU 优先；CPU 支持、延迟、峰值内存和显存通过本机实测决定
 同一次 A/B 对比必须使用同一先验。可做不同先验的敏感性分析，但应独立展示，不挑选更支持设计建议的一份。
 
 对要求 pixels per degree 的模型，缺少显示尺寸、分辨率及观看距离等必要条件时，不调用该配置或要求补全。固定实验配置可以用于工程比较，但必须标记为实验假设。
+
+（G0 锁定）分析侧先验与评估侧基线分离：分析用中心偏置仅适用于显式接受 centerbias 输入的后端（如 DeepGaze IIE 的 MIT1003 模板），foveacast/MSI-Net 无显式先验输入、其中心倾向隐含在权重中，须在 limitations 记录而非另行叠加；公开数据评估用中心偏置基线（CB）按 [benchmark-protocol.md](research/benchmark-protocol.md) §4.2 由 train 划分注视点构造，按数据集×窗口×划分分别版本化（文件+参数+哈希），test 划分数据不得参与任何基线构造（反泄漏）。两者不得互相替代或混用。
 
 ## 6. AOI 标注
 
@@ -99,6 +107,8 @@ AOI（Area of Interest）是要比较的视觉区域，例如标题、价格、�
 占比 8% 不表示“8% 玩家会看到”，也不表示注视时间占 8%。相对密度较高不自动代表设计更好；其含义取决于区域角色及玩家目标。区域尺寸变化时同时报告面积变化，避免把面积扩大带来的占比增长解释成效率提升。
 
 外部后端如果只返回厂商自有分数或可视化图片，不反推像素概率，不将这些分数冒充本方案指标；通过 capabilities 明确支持范围。
+
+（G0 锁定）两条指标路径口径分离：本节 AOI 统计（probability_mass / area_fraction / relative_density / delta_pp）使用严格归一化概率图（sum=1，容差 1e-6）；公开数据评估路径（IG/NSS/CC/sAUC/AUC-Judd/KL 及 to_density 数值防护、float64、log2 约定）以 [benchmark-protocol.md](research/benchmark-protocol.md) §6 为唯一口径。评估脚本实现于 metrics/eval 子模块，两条路径不得互相混用数值或防护常数。
 
 ## 8. Agent 评审
 
