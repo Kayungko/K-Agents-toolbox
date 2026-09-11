@@ -345,6 +345,15 @@ def s0_self_check(config: EvalConfig, shape: tuple[int, int] = (120, 160)) -> di
     _check("uniform.CC==0", cc(F, U, config), 0.0, crit.s0_nss_tol)
     _check("center_bias.IG_CB==0", information_gain(cb_density, cb_density, fix_a, config), 0.0, crit.s0_ig_tol)
 
+    # 大网格常数图数值稳健性（防回归）：667×1110 均匀图的 np.full 均值求和存在 ulp 级
+    # 舍入 → std() 非零；常数图判定必须走逐元素 max==min 路径（2026-09-11 UEyes 实跑缺陷）
+    big_shape = (667, 1110)
+    U_big = uniform_baseline(big_shape)
+    fix_big = _synthetic_fixations(big_shape, seed=config.sampling_seed + 7, n=40)
+    _check("uniform_big.NSS==0", nss(U_big, fix_big, config), 0.0, crit.s0_nss_tol)
+    _check("uniform_big.AUC-Judd==0.5", auc_judd(U_big, fix_big, config), 0.5, crit.s0_auc_tol)
+    _check("uniform_big.IG_U==0", information_gain(U_big, U_big, fix_big, config), 0.0, crit.s0_ig_tol)
+
     failed = [name for name, c in checks.items() if not c["ok"]]
     report = {"skipped": False, "checks": checks, "failed": failed}
     if failed:

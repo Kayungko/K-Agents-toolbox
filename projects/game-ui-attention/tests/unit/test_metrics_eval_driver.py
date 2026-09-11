@@ -481,3 +481,142 @@ def test_full_evaluation_predictor_shape_mismatch_fails_closed(tmp_path):
             dataset_name="synthetic-ueyes",
             windows=("3s",),
         )
+
+
+# ---------------------------------------------------------------------------
+# 备选划分 v2（L2 对照补跑指令①：dHash 簇约束 + §3.3 哈希分桶）与对照报告⑤
+# ---------------------------------------------------------------------------
+
+
+def test_fallback_cluster_constrained_split(dataset):
+    """簇约束备选划分：确定性、整簇同侧、生成参数完整记录。"""
+    hashes = {}
+    for img in dataset.images:
+        hashes[img["image_id"]] = drv.dhash64(_load_gray(Path(img["path"])))
+    ids = sorted(hashes)
+    a1, p1 = drv.fallback_cluster_constrained_split(ids, hashes, protocol_version="r2-v0.1", max_hamming=8)
+    a2, p2 = drv.fallback_cluster_constrained_split(ids, hashes, protocol_version="r2-v0.1", max_hamming=8)
+    assert a1 == a2  # 完全确定
+    assert p1["split_counts"]["train"] + p1["split_counts"]["val"] + p1["split_counts"]["test"] == len(ids)
+    assert p1["clusters_total"] >= 1  # 预置近重复对
+    # 整簇同侧：img_0001 与 img_0005（近重复）必须同 split
+    assert a1["img_0001.png"] == a1["img_0005.png"]
+    # 与纯 §3.3 分桶相比，簇约束只移动簇内成员
+    base = drv.fallback_hash_split(ids, "r2-v0.1")
+    moved = [i for i in ids if a1[i] != base[i]]
+    assert set(moved) <= {"img_0001.png", "img_0005.png"}
+    assert p1["images_moved_by_cluster_rule"] == len(moved)
+    # 桶规则抽查：非簇内图与纯分桶一致
+    assert a1["img_0003.png"] == base["img_0003.png"]
+
+
+def test_splits_file_build_fallback_cluster(dataset):
+    layout = drv.discover_layout(dataset.root)
+    metas = drv.discover_image_paths(layout, drv.load_info_csv(layout.info_csv))
+    hashes = {m.image_id: drv.dhash64(_load_gray(layout.root / m.rel_path)) for m in metas}
+    splits = drv.SplitsFile.build_fallback_cluster(metas, hashes, protocol_version="r2-v0.1", max_hamming=8)
+    assert splits.method == "fallback_hash_cluster_constrained"
+    assert splits.split_of("img_0001.png") == splits.split_of("img_0005.png")  # 簇同侧
+    joined = " ".join(splits.notes)
+    assert "SHA256(protocol_version|image_id) mod 100" in joined  # 生成参数记录
+    assert "整簇" in joined and "Hamming<=8" in joined
+
+
+def test_run_full_evaluation_fallback_mode(tmp_path):
+    """对照运行全流程：v2 划分文件名/CB 版本标签/variant 标注/描述性判定。
+
+    盐 "synthetic-fb-4" 使 6 图合成集中 img_0004/img_0005 落入 test 桶（85-99），
+    保证备选划分下 test 集非空（真实 UEyes 1980 图按 15% 桶比例自然非空）。
+    """
+    from ui_attention.metrics.eval.config import EvalConfig
+
+    ds_root = tmp_path / "extracted"
+    make_ueyes_dataset(ds_root, n_participants=4, per_image_fixations=30)
+    out_root = tmp_path / "eval-fallback"
+    config = EvalConfig(dataset="synthetic-ueyes", bootstrap_b=200, protocol_version="synthetic-fb-4")
+    outputs = drv.run_full_evaluation(
+        dataset_root=ds_root,
+        out_root=out_root,
+        config=config,
+        profiles=("fake-eval-v1",),
+        predictor_factory=_fake_predictor_factory,
+        dataset_name="synthetic-ueyes",
+        splits_mode="fallback_cluster",
+        splits_filename="splits.v2-fallback.json",
+        cb_version_tag="v2-fallback",
+        variant_label="备选划分对照",
+        verdicts_descriptive=True,
+    )
+    assert (out_root / "splits.v2-fallback.json").is_file()
+    sp = json.loads((out_root / "splits.v2-fallback.json").read_text(encoding="utf-8"))
+    assert sp["method"] == "fallback_hash_cluster_constrained"
+    by_id = {e["image_id"]: e["split"] for e in sp["images"]}
+    # 簇约束生效验证：img_0005（img_0001 近重复）整簇随代表 img_0001 同侧（train），
+    # 纯分桶下 img_0005 本应 test —— §3.4.1 近重复不跨划分在备选划分上自动满足
+    assert by_id["img_0001.png"] == "train"
+    assert by_id["img_0005.png"] == "train"
+    assert by_id["img_0004.png"] == "test"
+    assert [i["image_id"] for i in sp["images"] if i["split"] == "test"] == ["img_0004.png"]
+    # CB npz 用 v2 版本标签（与官方 v1 文件不混）
+    for w in ("1s", "3s", "7s"):
+        assert Path(outputs.cb_paths[w]).name == f"cb_synthetic-ueyes_{w}_train.v2-fallback.npz"
+    # 表 A 含候选模型行（test 集非空的证明）
+    models_in_a = {r["model"] for r in outputs.tables["A"]["rows"]}
+    assert "fake-eval-v1" in models_in_a
+    # 表标注 + summary variant
+    summary = json.loads((out_root / "summary.json").read_text(encoding="utf-8"))
+    assert summary["variant"] == "备选划分对照"
+    assert summary["splits_mode"] == "fallback_cluster"
+    assert any("备选划分对照" in x for x in summary["limitations"])
+    # S2 判定仅描述性
+    assert outputs.verdicts["S2"].get("descriptive_only") is True
+    assert "描述性" in outputs.verdicts["descriptive_note"]
+    # 表 md 带对照横幅
+    md = (out_root / "tables" / "table_A.md").read_text(encoding="utf-8")
+    assert md.startswith("> **备选划分对照**")
+
+
+def test_build_split_comparison(tmp_path):
+    """对照报告⑤：官方 vs 备选（描述性组间差值，两运行分表不混）。"""
+    from ui_attention.metrics.eval.config import EvalConfig
+
+    ds_root = tmp_path / "extracted"
+    make_ueyes_dataset(ds_root, n_participants=4, per_image_fixations=30, with_near_duplicate=False)
+    off = drv.run_full_evaluation(
+        dataset_root=ds_root,
+        out_root=tmp_path / "off",
+        config=EvalConfig(dataset="synthetic-ueyes", bootstrap_b=100, windows=("3s",)),
+        profiles=("fake-eval-v1",),
+        predictor_factory=_fake_predictor_factory,
+        dataset_name="synthetic-ueyes",
+        windows=("3s",),
+    )
+    fbk = drv.run_full_evaluation(
+        dataset_root=ds_root,
+        out_root=tmp_path / "fbk",
+        config=EvalConfig(
+            dataset="synthetic-ueyes", bootstrap_b=100, windows=("3s",), protocol_version="synthetic-fb-4"
+        ),
+        profiles=("fake-eval-v1",),
+        predictor_factory=_fake_predictor_factory,
+        dataset_name="synthetic-ueyes",
+        windows=("3s",),
+        splits_mode="fallback_cluster",
+        splits_filename="splits.v2-fallback.json",
+        cb_version_tag="v2-fallback",
+        variant_label="备选划分对照",
+        verdicts_descriptive=True,
+    )
+    result = drv.build_split_comparison(
+        off.out_root / "tables" / "tables.json",
+        fbk.out_root / "tables" / "tables.json",
+        tmp_path / "fbk",
+    )
+    assert result["rows"], "对照行不应为空"
+    models = {r["model"] for r in result["rows"]}
+    assert {"uniform", "center_bias", "fake-eval-v1"} <= models
+    assert all(r["metric"] in ("IG_CB", "NSS") for r in result["rows"])
+    assert "描述性" in result["note"] and "§8.1" in result["note"]
+    assert (tmp_path / "fbk" / "comparison_official_vs_fallback.md").is_file()
+    assert (tmp_path / "fbk" / "comparison_official_vs_fallback.json").is_file()
+    del off, fbk

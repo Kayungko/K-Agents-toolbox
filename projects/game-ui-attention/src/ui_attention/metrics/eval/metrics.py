@@ -81,15 +81,20 @@ def information_gain(S_raw: np.ndarray, B_raw: np.ndarray, fix: FixationSet, con
 def nss(S_raw: np.ndarray, fix: FixationSet, config: EvalConfig) -> MetricResult:
     """Ŝ = (S − mean)/std（全图像素统计，S 为原始显著图）；注视点上加权平均。
 
-    std=0（常数图，含均匀基线 U）→ 固定记 0 并打 constant_map flag
+    常数图（含均匀基线 U）→ 固定记 0 并打 constant_map flag
     （U 基线 NSS≈0 是预期 sanity 结果，由 flag 机制而非除零保护产生）。
+
+    常数图判定用逐元素 ``max == min``（严格相等）而非 ``std == 0``：大数组
+    （实测 667×1110）上均匀图 np.full 的均值求和存在 ulp 级舍入 → std() 非零，
+    若再以微小 std 归一化会把舍入噪声放大成 ±1 量级（2026-09-11 UEyes 实跑
+    发现的真实缺陷；修复后 S0 增加大网格防回归自检）。
     """
     if len(fix) == 0:
         return MetricResult("NSS", float("nan"), {"empty_fixations": True})
     S = np.asarray(S_raw, dtype=np.float64)
-    std = float(S.std())
-    if std == 0.0:
+    if float(S.max()) == float(S.min()):
         return MetricResult("NSS", 0.0, {"constant_map": True})
+    std = float(S.std())
     normalized = (S - float(S.mean())) / std
     value = _weighted_mean_at_fixations(_fixation_samples(normalized, fix), fix)
     return MetricResult("NSS", value, {"constant_map": False})
@@ -109,9 +114,12 @@ def cc(F_density: np.ndarray, S_raw: np.ndarray, config: EvalConfig) -> MetricRe
     S = np.asarray(S_raw, dtype=np.float64)
     if F.shape != S.shape:
         raise ValueError(f"CC 输入形状不一致：{F.shape} vs {S.shape}")
+    # 常数侧判定与 NSS 同口径（逐元素 max==min，防大数组 ulp 级 std 舍入）
+    f_const = float(F.max()) == float(F.min())
+    s_const = float(S.max()) == float(S.min())
+    if f_const or s_const:
+        return MetricResult("CC", 0.0, {"constant_map": True, "constant_side": "F" if f_const else "S"})
     f_std, s_std = float(F.std()), float(S.std())
-    if f_std == 0.0 or s_std == 0.0:
-        return MetricResult("CC", 0.0, {"constant_map": True, "constant_side": "F" if f_std == 0.0 else "S"})
     f = (F - float(F.mean())) / f_std
     s = (S - float(S.mean())) / s_std
     value = float(np.mean(f * s))

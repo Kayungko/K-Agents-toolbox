@@ -86,13 +86,31 @@ def make_ueyes_dataset(
     out = SyntheticUEyes(root=root)
 
     # -- images -------------------------------------------------------------
-    for iid, cat, block, split, w, h in specs:
+    # 每图唯一结构（固定参数表）：渐变方向 + 亮块位置/大小 → dHash 两两距离 >8，
+    # 只有显式构造的 img_0001↔img_0005 近重复对会被聚簇（测试前提）
+    pattern_params = [
+        # (gradient_dir, block_x_ratio, block_y_ratio, block_size_ratio)
+        (1, 0.10, 0.15, 0.30),
+        (-1, 0.55, 0.10, 0.25),
+        (1, 0.20, 0.60, 0.35),
+        (-1, 0.60, 0.55, 0.30),
+        (1, 0.45, 0.30, 0.20),
+        (-1, 0.05, 0.45, 0.25),
+    ]
+    for si, (iid, cat, block, split, w, h) in enumerate(specs):
         d = root / "images" / block
         d.mkdir(parents=True, exist_ok=True)
+        gdir, bxr, byr, bsr = pattern_params[si % len(pattern_params)]
+        grad = np.linspace(0, 255, w)
+        if gdir < 0:
+            grad = grad[::-1]
         arr = np.zeros((h, w, 3), dtype=np.uint8)
         arr[:, :, 0] = rng.integers(20, 200)
-        arr[:, :, 1] = rng.integers(20, 200)
-        arr[h // 4 : h // 2, w // 4 : w // 2] = 250  # 显著块
+        arr[:, :, 2] = np.tile(grad.astype(np.uint8), (h, 1))
+        bw, bh = max(4, int(w * bsr)), max(4, int(h * bsr))
+        bx0 = int(bxr * max(1, w - bw))
+        by0 = int(byr * max(1, h - bh))
+        arr[by0 : by0 + bh, bx0 : bx0 + bw] = (250, 250, 250)
         p = d / iid
         Image.fromarray(arr, "RGB").save(p)
         out.images.append(

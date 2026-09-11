@@ -340,6 +340,53 @@ def fallback_hash_split(image_ids: Iterable[str], protocol_version: str) -> dict
     return out
 
 
+def fallback_cluster_constrained_split(
+    image_ids: Iterable[str],
+    hashes: dict[str, int],
+    *,
+    protocol_version: str,
+    max_hamming: int = 8,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """簇约束备选划分（L2 对照补跑指令①：先应用 §3.4.1 近重复簇约束，再 §3.3 分桶）。
+
+    规则（完全确定、可复现）：
+    1. dHash 聚簇（Hamming ≤ max_hamming，冻结阈值 8）；
+    2. 每簇整体同侧：簇的 split = 簇内**排序后首个 image_id**（代表）的 §3.3 哈希桶值；
+    3. 非簇内单图按自身哈希桶正常分配（0-69 train / 70-84 val / 85-99 test）。
+
+    返回 (assign, params)；params 完整记录生成参数（入 splits 文件 notes 与表 E）。
+    """
+    ids = sorted(image_ids)
+    base = fallback_hash_split(ids, protocol_version)
+    clusters = duplicate_clusters({i: hashes[i] for i in ids if i in hashes}, max_hamming)
+    assign = dict(base)
+    cluster_records = []
+    for cluster in clusters:
+        representative = cluster[0]  # duplicate_clusters 返回排序后列表
+        target = base[representative]
+        moved = [iid for iid in cluster if assign[iid] != target]
+        for iid in cluster:
+            assign[iid] = target
+        cluster_records.append(
+            {"representative": representative, "split": target, "size": len(cluster), "moved": len(moved)}
+        )
+    counts = {"train": 0, "val": 0, "test": 0}
+    for s in assign.values():
+        counts[s] += 1
+    params = {
+        "algorithm": "SHA256(protocol_version|image_id) mod 100; 0-69 train / 70-84 val / 85-99 test",
+        "protocol_version": protocol_version,
+        "salt": None,
+        "cluster_constraint": f"dHash64 Hamming<={max_hamming} 聚簇；整簇随排序后首个 image_id 的桶值同侧（§3.4.1）",
+        "dup_hamming_max": max_hamming,
+        "clusters_total": len(clusters),
+        "images_moved_by_cluster_rule": sum(c["moved"] for c in cluster_records),
+        "split_counts": counts,
+        "cluster_assignments": cluster_records,
+    }
+    return assign, params
+
+
 @dataclass(frozen=True)
 class SplitsFile:
     """splits.v1.json 的内存形态（每图 {image_id, category, block, split} + 生成参数 + 文件 SHA256）。"""
@@ -417,6 +464,45 @@ class SplitsFile:
             entries=entries,
             protocol_version=protocol_version,
             method=method,
+            generated_at_utc=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            notes=tuple(notes),
+        )
+
+    @classmethod
+    def build_fallback_cluster(
+        cls,
+        metas: Sequence[ImageMeta],
+        hashes: dict[str, int],
+        *,
+        protocol_version: str,
+        max_hamming: int = 8,
+        extra_notes: Sequence[str] = (),
+    ) -> SplitsFile:
+        """备选划分 v2（L2 对照补跑指令①）：dHash 簇约束 + §3.3 确定性哈希分桶。
+
+        生成参数（算法/盐/阈值/簇数/整簇同侧规则/split 计数/逐簇分配）全部写入 notes，
+        随 splits.v2-fallback.json 冻结（修改必须递增版本号并重跑全部对比，§3.3.4）。
+        """
+        assign, params = fallback_cluster_constrained_split(
+            [m.image_id for m in metas], hashes, protocol_version=protocol_version, max_hamming=max_hamming
+        )
+        params_json = json.dumps(
+            {k: v for k, v in params.items() if k != "cluster_assignments"}, ensure_ascii=False, sort_keys=True
+        )
+        notes = [
+            "备选划分 v2（对照补跑专用，与官方划分严格分表不混，§8.1 划分文件不同）",
+            f"生成参数：{params_json}",
+            f"簇分配明细：{json.dumps(params['cluster_assignments'], ensure_ascii=False, sort_keys=True)}",
+            *extra_notes,
+        ]
+        entries = tuple(
+            {"image_id": m.image_id, "category": m.category, "block": m.block, "split": assign[m.image_id]}
+            for m in sorted(metas, key=lambda x: (x.category, x.block, x.image_id))
+        )
+        return cls(
+            entries=entries,
+            protocol_version=protocol_version,
+            method="fallback_hash_cluster_constrained",
             generated_at_utc=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             notes=tuple(notes),
         )
@@ -793,8 +879,13 @@ def build_cb_for_window(
     out_dir: Path,
     *,
     dataset_name: str = "ueyes",
+    version_tag: str = "v1",
 ) -> tuple[CenterBiasBaseline, str]:
-    """CB train-only 构造（§4.2 + 反泄漏 §3.4.3）；npz 版本化落盘，返回 (baseline, 文件sha256)。"""
+    """CB train-only 构造（§4.2 + 反泄漏 §3.4.3）；npz 版本化落盘，返回 (baseline, 文件sha256)。
+
+    ``version_tag`` 区分划分版本（官方划分 v1 / 备选划分对照 v2-fallback），
+    新版本 = 新文件 + 新哈希，不与旧版混表（§8.1）。
+    """
     train_ids = set(splits.image_ids("train"))
     meta_by_id = {m.image_id: m for m in metas}
     inputs: list[CenterBiasFitInput] = []
@@ -813,9 +904,10 @@ def build_cb_for_window(
         weighting=config.weighting,
         source_split="train",
         source_split_hash=splits.file_sha256 or "",
+        version=f"cb.{version_tag}",
     )
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"cb_{dataset_name}_{window}_train.v1.npz"
+    path = out_dir / f"cb_{dataset_name}_{window}_train.{version_tag}.npz"
     sha = cb.save(path)
     return cb, sha
 
@@ -887,6 +979,73 @@ def _image_case(meta: ImageMeta, gt: GtCase, split: str) -> Any:
     )
 
 
+def _rows_for_prediction(
+    *,
+    dataset_name: str,
+    window: str,
+    model: str,
+    model_version: str,
+    S: np.ndarray,
+    case: Any,  # pipeline.ImageCase
+    meta: ImageMeta,
+    gt_case: GtCase,
+    cb: CenterBiasBaseline | None,
+    neg: FixationSet,
+    config: EvalConfig,
+    split: str = "test",
+    F_precomputed: np.ndarray | None = None,
+) -> list[Any]:
+    """单图 × 单模型 × 单窗口的全部指标行（流式编排与批量编排共用同一实现）。
+
+    ``F_precomputed``：模糊真值图与模型无关（每 图×窗口 只需计算一次），
+    流式路径传入缓存值避免对每模型重复高斯模糊。
+    """
+    from .baselines import uniform_baseline
+    from .groundtruth import blurred_truth
+    from .metrics import MetricResult, auc_judd, cc, information_gain, kl_divergence, nss, sauc, similarity
+    from .pipeline import PerImageRow, _validate_prediction, exclusion_flag
+
+    S = _validate_prediction(S, case.image_id)
+    if S.shape != (meta.height, meta.width):
+        raise EvalGateError(f"预测图与评估网格不一致：{case.image_id} {S.shape} vs {(meta.height, meta.width)}")
+    flag = exclusion_flag(case, min_fixations=config.min_fixations, min_viewers=config.min_viewers)
+    F = F_precomputed if F_precomputed is not None else blurred_truth(case.fixations, case.shape, config)[0]
+    U = uniform_baseline(case.shape)
+    results: list[MetricResult] = []
+    if cb is not None:
+        r = information_gain(S, cb.evaluate(case.shape), case.fixations, config)
+        results.append(MetricResult("IG_CB", r.value, r.flags))
+    r = information_gain(S, U, case.fixations, config)
+    results.append(MetricResult("IG_U", r.value, r.flags))
+    results.append(nss(S, case.fixations, config))
+    results.append(cc(F, S, config))
+    results.append(sauc(S, case.fixations, neg, config))
+    results.append(auc_judd(S, case.fixations, config))
+    results.append(kl_divergence(F, S, config))
+    if config.include_sim:
+        results.append(similarity(F, S, config))
+    rows: list[Any] = []
+    for res in results:
+        rows.append(
+            PerImageRow(
+                dataset=dataset_name,
+                split=split,
+                window=window,
+                model=model,
+                model_version=model_version,
+                image_id=case.image_id,
+                category=meta.category,
+                block=meta.block,
+                n_viewers=gt_case.n_viewers,
+                n_fix=gt_case.n_fix,
+                excluded_flag=flag or ("empty_samples" if res.excluded else ""),
+                metric=res.name,
+                value=float(res.value),
+            )
+        )
+    return rows
+
+
 def evaluate_model_rows(
     *,
     dataset_name: str,
@@ -901,11 +1060,8 @@ def evaluate_model_rows(
     config: EvalConfig,
     split: str = "test",
 ) -> list[Any]:
-    """单模型 × 单窗口 × split 内全部图像的逐图行（评估网格=原图分辨率；窗口绝不混合）。"""
-    from .baselines import pooled_other_fixations, uniform_baseline
-    from .groundtruth import blurred_truth
-    from .metrics import MetricResult, auc_judd, cc, information_gain, kl_divergence, nss, sauc, similarity
-    from .pipeline import PerImageRow, _validate_prediction, exclusion_flag
+    """单模型 × 单窗口 × split 内全部图像的逐图行（批量入口；评估网格=原图分辨率；窗口绝不混合）。"""
+    from .baselines import pooled_other_fixations
 
     meta_by_id = {m.image_id: m for m in metas}
     ids = [iid for iid in splits.image_ids(split) if iid in predictions]
@@ -914,44 +1070,20 @@ def evaluate_model_rows(
     for iid in ids:
         meta = meta_by_id[iid]
         case = _image_case(meta, gt[iid], split)
-        S = _validate_prediction(predictions[iid], iid)
-        if S.shape != (meta.height, meta.width):
-            raise EvalGateError(f"预测图与评估网格不一致：{iid} {S.shape} vs {(meta.height, meta.width)}")
-        flag = exclusion_flag(case, min_fixations=config.min_fixations, min_viewers=config.min_viewers)
-        F, _ = blurred_truth(case.fixations, case.shape, config)
-        U = uniform_baseline(case.shape)
-        neg = pooled_other_fixations(pool, iid)
-        results: list[MetricResult] = []
-        if cb is not None:
-            r = information_gain(S, cb.evaluate(case.shape), case.fixations, config)
-            results.append(MetricResult("IG_CB", r.value, r.flags))
-        r = information_gain(S, U, case.fixations, config)
-        results.append(MetricResult("IG_U", r.value, r.flags))
-        results.append(nss(S, case.fixations, config))
-        results.append(cc(F, S, config))
-        results.append(sauc(S, case.fixations, neg, config))
-        results.append(auc_judd(S, case.fixations, config))
-        results.append(kl_divergence(F, S, config))
-        if config.include_sim:
-            results.append(similarity(F, S, config))
-        for res in results:
-            rows.append(
-                PerImageRow(
-                    dataset=dataset_name,
-                    split=split,
-                    window=window,
-                    model=model,
-                    model_version=model_version,
-                    image_id=iid,
-                    category=meta.category,
-                    block=meta.block,
-                    n_viewers=gt[iid].n_viewers,
-                    n_fix=gt[iid].n_fix,
-                    excluded_flag=flag or ("empty_samples" if res.excluded else ""),
-                    metric=res.name,
-                    value=float(res.value),
-                )
-            )
+        rows += _rows_for_prediction(
+            dataset_name=dataset_name,
+            window=window,
+            model=model,
+            model_version=model_version,
+            S=predictions[iid],
+            case=case,
+            meta=meta,
+            gt_case=gt[iid],
+            cb=cb,
+            neg=pooled_other_fixations(pool, iid),
+            config=config,
+            split=split,
+        )
     return rows
 
 
@@ -1315,33 +1447,54 @@ def run_full_evaluation(
     dataset_name: str = "ueyes",
     windows: Sequence[str] | None = None,
     progress_fn: Any = None,
+    splits_mode: str = "official",
+    splits_filename: str = SPLITS_VERSION,
+    cb_version_tag: str = "v1",
+    dataset_md5_verified: str | None = None,
+    variant_label: str = "",
+    verdicts_descriptive: bool = False,
 ) -> EvaluationOutputs:
     """R2 协议全流程（附录 A 伪代码的可运行编排）。
 
-    步骤：布局发现 →（可选 zip md5 红线校验）→ info.csv → 图像路径/尺寸 → 划分冻结
-    → dHash 近重复聚簇 → 逐窗口真值重建 → CB train-only 构造 → S0 自检门 →
-    test split 推理（每模型一次，三窗口复用）→ 逐图 CSV → bootstrap/配对/Holm →
-    表 A-E → S0-S3 判定 → summary。失败一律结构化抛出（不产出部分成功报告）。
+    步骤：布局发现 →（可选 zip md5 红线校验）→ 划分权威文件 → 图像路径/尺寸 →
+    dHash 近重复聚簇 → 划分冻结（official=官方标志 / fallback_cluster=§3.3 哈希分桶
+    +§3.4.1 簇约束，L2 对照补跑指令）→ 逐窗口真值重建 → CB train-only 构造 →
+    S0 自检门 → **流式**推理+指标（图外层/窗口中层/模型内层：每图只加载与推理一次、
+    density 跨窗口复用后即弃、模糊真值每图×窗口一次，内存 O(单图×模型数)）→
+    逐图 CSV（每窗口落盘）→ bootstrap/配对/Holm → 表 A-E → S0-S3 判定 → summary。
+    失败一律结构化抛出。
+
+    对照运行参数（L2 指令④⑥⑦）：``variant_label`` 标注全部表（与官方划分严格分表
+    不混，§8.1 划分文件不同）；``verdicts_descriptive=True`` 时 S1/S2 判定仅作描述性
+    记录；``dataset_md5_verified`` 注入主运行已验证的同一 zip md5（不重复计算，来源注明）。
 
     predictor_factory: ``profile_name -> predict(image_array) -> (density, meta)``；
-    缺省用 :func:`make_registry_predictor`（经 C2 registry）。未登记 profile → 记录跳过
-    （不崩溃；C2 的 1s/7s 登记完成后重跑即可入表）。
+    缺省用 :func:`make_registry_predictor`（经 C2 registry）。未登记 profile → 记录跳过。
     """
+    from .baselines import pooled_other_fixations, uniform_baseline
+    from .groundtruth import blurred_truth
     from .pipeline import s0_self_check, write_per_image_csv
     from .tables import build_table_a, build_table_b, build_table_c, build_table_d, build_table_e
 
     config = config or EvalConfig()
     config.validate()
     windows = tuple(windows or config.windows)
+    if splits_mode not in ("official", "fallback_cluster"):
+        raise DatasetError(f"未知 splits_mode {splits_mode!r}（official|fallback_cluster）")
     prog = progress_fn or (lambda msg: None)
     out = Path(out_root)
     out.mkdir(parents=True, exist_ok=True)
-    outputs = EvaluationOutputs(out_root=out, splits_path=out / SPLITS_VERSION, splits_sha256="")
+    outputs = EvaluationOutputs(out_root=out, splits_path=out / splits_filename, splits_sha256="")
 
     dataset_md5 = None
+    md5_source = ""
     if zip_path is not None:
         prog("校验 zip md5（红线：不符 → 结构化失败）…")
         dataset_md5 = verify_zip_md5(zip_path)["actual"]
+        md5_source = "verified_this_run"
+    elif dataset_md5_verified is not None:
+        dataset_md5 = dataset_md5_verified
+        md5_source = "verified_in_official_run(same_zip)"
 
     layout = discover_layout(dataset_root)
     prog(f"解析划分权威文件 {layout.info_csv.name} 并发现图像路径…")
@@ -1359,12 +1512,7 @@ def run_full_evaluation(
     else:
         split_note = base_note
 
-    prog("冻结划分 → splits.v1.json…")
-    splits = SplitsFile.build(metas, protocol_version=config.protocol_version, extra_notes=[split_note])
-    outputs.splits_sha256 = splits.write(outputs.splits_path)
-    splits = SplitsFile.load(outputs.splits_path, verify_sha256=outputs.splits_sha256)
-
-    prog("dHash 近重复聚簇与泄漏审计…")
+    prog("dHash 近重复聚簇（1980 图）…")
     hashes: dict[str, int] = {}
     mode_audit: dict[str, Any] = {"modes": {}, "n_alpha": 0, "n_non_opaque_alpha": 0, "non_opaque_alpha_ids": []}
     for m in metas:
@@ -1377,6 +1525,21 @@ def run_full_evaluation(
                 mode_audit["n_non_opaque_alpha"] += 1
                 mode_audit["non_opaque_alpha_ids"].append(m.image_id)
 
+    if splits_mode == "official":
+        prog(f"冻结官方划分 → {splits_filename}…")
+        splits = SplitsFile.build(metas, protocol_version=config.protocol_version, extra_notes=[split_note])
+    else:
+        prog(f"构造备选划分（dHash 簇约束 + §3.3 哈希分桶）→ {splits_filename}…")
+        splits = SplitsFile.build_fallback_cluster(
+            metas,
+            hashes,
+            protocol_version=config.protocol_version,
+            max_hamming=config.dup_hamming_max,
+            extra_notes=[split_note],
+        )
+    outputs.splits_sha256 = splits.write(outputs.splits_path)
+    splits = SplitsFile.load(outputs.splits_path, verify_sha256=outputs.splits_sha256)
+
     test_metrics_started = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     gt_by_window: dict[str, dict[str, GtCase]] = {}
@@ -1387,10 +1550,12 @@ def run_full_evaluation(
             layout, metas, window, weighting=config.weighting, progress_every=20, progress_fn=progress_fn
         )
         gt_by_window[window] = gt
-        prog(f"构造 CB 基线（train-only，窗口 {window}）…")
-        cb, cb_sha = build_cb_for_window(gt, metas, splits, window, config, out, dataset_name=dataset_name)
+        prog(f"构造 CB 基线（train-only，窗口 {window}，版本 {cb_version_tag}）…")
+        cb, cb_sha = build_cb_for_window(
+            gt, metas, splits, window, config, out, dataset_name=dataset_name, version_tag=cb_version_tag
+        )
         cbs[window] = cb
-        outputs.cb_paths[window] = str(out / f"cb_{dataset_name}_{window}_train.v1.npz")
+        outputs.cb_paths[window] = str(out / f"cb_{dataset_name}_{window}_train.{cb_version_tag}.npz")
         outputs.cb_hashes[window] = cb_sha
 
     excluded = {
@@ -1428,91 +1593,95 @@ def run_full_evaluation(
     prog("S0 管线自检门…")
     s0_report = s0_self_check(config)  # 不过 → EvalGateError（禁止出报告）
 
-    # 推理：每模型一次（窗口无关，§5.7），三窗口复用同一 density
+    # 预测器创建（未登记 profile → 结构化跳过，不崩溃）
     factory = predictor_factory or make_registry_predictor
-    predictions: dict[str, dict[str, np.ndarray]] = {}
+    predictors: dict[str, Any] = {}
     model_meta: dict[str, dict[str, Any]] = {}
     for profile_name in profiles:
         try:
-            predict = factory(profile_name)
+            predictors[profile_name] = factory(profile_name)
         except UiAttentionError as exc:
             prog(f"profile {profile_name} 不可用（{exc.code.value}）：记录跳过，待登记后重跑")
             outputs.skipped_profiles.append(profile_name)
             outputs.model_meta.setdefault("skipped", {})[profile_name] = {"reason": exc.message, "code": exc.code.value}
-            continue
-        preds: dict[str, np.ndarray] = {}
-        meta_first: dict[str, Any] = {}
-        test_ids = splits.image_ids("test")
-        for i, iid in enumerate(test_ids):
-            meta = next(m for m in metas if m.image_id == iid)
-            img_arr, _minfo = load_eval_image(layout.root / meta.rel_path)
-            density, rmeta = predict(img_arr)
-            preds[iid] = density
-            meta_first = rmeta
-            if progress_fn and (i + 1) % 10 == 0:
-                progress_fn(f"推理 {profile_name}：{i + 1}/{len(test_ids)}")
-        predictions[profile_name] = preds
-        model_meta[profile_name] = meta_first
-    outputs.model_meta = {**outputs.model_meta, **model_meta}
 
+    # 流式评估：图外层 / 窗口中层 / 模型内层——每图只加载与推理一次（推理与窗口无关
+    # §5.7，density 三窗口复用后即弃）、模糊真值每 图×窗口 只算一次，内存 O(单图×模型数)
+    test_ids = splits.image_ids("test")
+    meta_by_id = {m.image_id: m for m in metas}
+    pools = {w: [(iid, gt_by_window[w][iid].fixations) for iid in test_ids if iid in gt_by_window[w]] for w in windows}
     all_rows: list[Any] = []
-    for window in windows:
-        gt = gt_by_window[window]
-        cb = cbs[window]
-        # 基线必须过同一管线（§4.4）：uniform 与 center_bias 作为"模型"
-        from .baselines import uniform_baseline
-
-        uniform_preds = {
-            m.image_id: uniform_baseline((m.height, m.width)) for m in metas if splits.split_of(m.image_id) == "test"
-        }
-        cb_preds = {
-            m.image_id: cb.evaluate((m.height, m.width)) for m in metas if splits.split_of(m.image_id) == "test"
-        }
-        all_rows += evaluate_model_rows(
-            dataset_name=dataset_name,
-            window=window,
-            model="uniform",
-            model_version=config.protocol_version,
-            predictions=uniform_preds,
-            gt=gt,
-            metas=metas,
-            splits=splits,
-            cb=cb,
-            config=config,
-        )
-        all_rows += evaluate_model_rows(
-            dataset_name=dataset_name,
-            window=window,
-            model="center_bias",
-            model_version=cb.version,
-            predictions=cb_preds,
-            gt=gt,
-            metas=metas,
-            splits=splits,
-            cb=cb,
-            config=config,
-        )
-        for profile_name, preds in predictions.items():
-            version = str(model_meta.get(profile_name, {}).get("backend_version", "unknown"))
-            all_rows += evaluate_model_rows(
+    for i, iid in enumerate(test_ids):
+        meta = meta_by_id[iid]
+        img_arr: np.ndarray | None = None
+        densities: dict[str, tuple[np.ndarray, dict[str, Any]]] = {}
+        for pname, predict in predictors.items():
+            if img_arr is None:
+                img_arr, _minfo = load_eval_image(layout.root / meta.rel_path)
+            densities[pname] = predict(img_arr)
+            model_meta.setdefault(pname, densities[pname][1])
+        for window in windows:
+            gt = gt_by_window[window]
+            cb = cbs[window]
+            case = _image_case(meta, gt[iid], "test")
+            neg = pooled_other_fixations(pools[window], iid)
+            F = blurred_truth(case.fixations, case.shape, config)[0]
+            shape = (meta.height, meta.width)
+            # 基线必须过同一管线（§4.4）：uniform 与 center_bias 逐图现生成
+            all_rows += _rows_for_prediction(
                 dataset_name=dataset_name,
                 window=window,
-                model=profile_name,
-                model_version=version,
-                predictions=preds,
-                gt=gt,
-                metas=metas,
-                splits=splits,
+                model="uniform",
+                model_version=config.protocol_version,
+                S=uniform_baseline(shape),
+                case=case,
+                meta=meta,
+                gt_case=gt[iid],
                 cb=cb,
+                neg=neg,
                 config=config,
+                F_precomputed=F,
             )
+            all_rows += _rows_for_prediction(
+                dataset_name=dataset_name,
+                window=window,
+                model="center_bias",
+                model_version=cb.version,
+                S=cb.evaluate(shape),
+                case=case,
+                meta=meta,
+                gt_case=gt[iid],
+                cb=cb,
+                neg=neg,
+                config=config,
+                F_precomputed=F,
+            )
+            for pname, (density, rmeta) in densities.items():
+                all_rows += _rows_for_prediction(
+                    dataset_name=dataset_name,
+                    window=window,
+                    model=pname,
+                    model_version=str(rmeta.get("backend_version", "unknown")),
+                    S=density,
+                    case=case,
+                    meta=meta,
+                    gt_case=gt[iid],
+                    cb=cb,
+                    neg=neg,
+                    config=config,
+                    F_precomputed=F,
+                )
+        if progress_fn and (i + 1) % 10 == 0:
+            progress_fn(f"流式评估：{i + 1}/{len(test_ids)} 图（{len(windows)} 窗口 × {2 + len(predictors)} 模型）")
+    for window in windows:
         csv_path = out / f"per_image_{dataset_name}_{window}.csv"
         n = write_per_image_csv([r for r in all_rows if r.window == window], csv_path)
         outputs.csv_paths[window] = f"{csv_path} ({n} rows)"
         prog(f"窗口 {window}：逐图 CSV 落盘 {n} 行")
+    outputs.model_meta = {**outputs.model_meta, **model_meta}
 
     prog("聚合：bootstrap CI / 配对差值 / Holm / 表 A-E…")
-    candidates = [p for p in profiles if p in predictions]
+    candidates = [p for p in profiles if p in model_meta]
     table_a_rows, _used = aggregate_table_a(all_rows, config)
     pairs: list[tuple[str, str, tuple[str, ...]]] = [("center_bias", "uniform", config.criteria.s1_metrics)]
     pairs += [(c, "center_bias", config.criteria.s2_metrics) for c in candidates]
@@ -1532,6 +1701,9 @@ def run_full_evaluation(
         dataset_name=dataset_name,
         dataset_md5=dataset_md5,
     )
+    fingerprint["variant"] = variant_label or "official"
+    fingerprint["splits_mode"] = splits_mode
+    fingerprint["dataset_zip_md5_source"] = md5_source
     outputs.fingerprint = fingerprint
 
     from .tables import REPORT_DISCLAIMER
@@ -1550,6 +1722,11 @@ def run_full_evaluation(
             f"（不合成、不填黑/白，保留存储 RGB 值），其中 {mode_audit['n_non_opaque_alpha']} 张含真实透明像素"
             f"（ID 与 alpha 极值见 audit.image_mode_audit）；模式分布 {mode_audit['modes']}。"
             "分析 CLI 路径（imaging.load_image）保持更严格的透明拒绝口径，两条路径互不混用"
+        )
+    if variant_label:
+        limitation_notes.append(
+            f"本运行为【{variant_label}】：划分文件（{splits_filename}，sha256={outputs.splits_sha256[:16]}…）"
+            "与 CB 版本均不同于官方划分主运行——依 §8.1 与主运行严格分表并列，不得同表/同轴柱状图"
         )
     for pname in candidates:
         mm = model_meta.get(pname, {})
@@ -1572,14 +1749,27 @@ def run_full_evaluation(
         "disclaimer": REPORT_DISCLAIMER,
         "participant_limitation": "参与者间变异未单独建模，CI 仅反映图像抽样变异（§7.2 最小方案）",
         "limitations": limitation_notes,
+        "variant": variant_label or "official",
     }
     outputs.verdicts = judge_criteria(config=config, table_b=table_b_rows, candidates=candidates, s0_report=s0_report)
+    if verdicts_descriptive:
+        outputs.verdicts["descriptive_note"] = (
+            f"本运行（{variant_label or '对照'}）的 S1/S2 判定仅作描述性记录：划分文件与 CB 版本不同于官方划分主运行"
+            "（§8.1），正式门槛判定以官方划分运行为准；口径裁决权在 L1，不下选型结论"
+        )
+        if isinstance(outputs.verdicts.get("S2"), dict):
+            outputs.verdicts["S2"]["descriptive_only"] = True
 
+    variant_header = (
+        f"> **{variant_label}**：与官方划分主运行严格分表、不混表（§8.1 划分文件不同；CB 版本不同）。\n\n"
+        if variant_label
+        else ""
+    )
     tables_dir = out / "tables"
     tables_dir.mkdir(parents=True, exist_ok=True)
     for name in ("A", "B", "C", "D", "E"):
         (tables_dir / f"table_{name}.md").write_text(
-            outputs.tables[name]["markdown"] + "\n", encoding="utf-8", newline="\n"
+            variant_header + outputs.tables[name]["markdown"] + "\n", encoding="utf-8", newline="\n"
         )
     (tables_dir / "tables.json").write_text(
         json.dumps(
@@ -1598,6 +1788,10 @@ def run_full_evaluation(
         json.dumps(
             {
                 "dataset": dataset_name,
+                "variant": variant_label or "official",
+                "splits_mode": splits_mode,
+                "splits_file": splits_filename,
+                "dataset_zip_md5_source": md5_source,
                 "windows": list(windows),
                 "candidates": candidates,
                 "skipped_profiles": outputs.skipped_profiles,
@@ -1620,6 +1814,96 @@ def run_full_evaluation(
     return outputs
 
 
+def build_split_comparison(
+    official_tables_json: str | Path,
+    fallback_tables_json: str | Path,
+    out_dir: str | Path,
+    *,
+    metrics: Sequence[str] = ("IG_CB", "NSS"),
+) -> dict[str, Any]:
+    """对照报告（L2 指令⑤）：逐模型×窗口关键指标（IG_CB/NSS）官方划分 vs 备选划分的差值。
+
+    两次运行的 test 集合不同（划分文件不同，§8.1 禁止同表）→ 本差值为**两次独立评估
+    的组间描述性差异**（非同图配对差值 CI），用途 = 量化官方划分"test 分数偏乐观"幅度
+    （近重复簇跨划分泄漏的影响）。diff = official_mean − fallback_mean；diff>0 表示
+    官方划分下该指标更高（乐观方向）。
+    """
+    off = json.loads(Path(official_tables_json).read_text(encoding="utf-8"))
+    fbk = json.loads(Path(fallback_tables_json).read_text(encoding="utf-8"))
+
+    # tables.json 的 A.rows 为 {model, split, window, "IG_CB ↑": "mean [lo, hi]", ...} 的展示单元格；
+    # 对照表从单元格文本解析 mean（4 位小数，描述性对照足够；全精度值在各自 per-image CSV）。
+    def _parse_cell(text: str) -> tuple[float | None, str]:
+        text = text.strip()
+        if text in ("—", ""):
+            return None, text
+        mean_part = text.split("[")[0].strip()
+        try:
+            return float(mean_part), text
+        except ValueError:
+            return None, text
+
+    rows: list[dict[str, Any]] = []
+    fbk_rows = {(r["model"], r["window"]): r for r in fbk["tables"]["A"]["rows"]}
+    for off_row in off["tables"]["A"]["rows"]:
+        key = (off_row["model"], off_row["window"])
+        fbk_row = fbk_rows.get(key)
+        if fbk_row is None:
+            continue
+        for metric in metrics:
+            col = next((c for c in off_row if c.startswith(metric + " ")), None)
+            if col is None:
+                continue
+            off_mean, off_text = _parse_cell(str(off_row[col]))
+            fbk_mean, fbk_text = _parse_cell(str(fbk_row[col]))
+            if off_mean is None or fbk_mean is None:
+                continue
+            rows.append(
+                {
+                    "model": off_row["model"],
+                    "window": off_row["window"],
+                    "metric": metric,
+                    "official_mean": off_mean,
+                    "fallback_mean": fbk_mean,
+                    "diff_official_minus_fallback": round(off_mean - fbk_mean, 6),
+                    "official_cell": off_text,
+                    "fallback_cell": fbk_text,
+                }
+            )
+    header = ["model", "window", "metric", "official_mean", "fallback_mean", "diff(O−F)"]
+    md_lines = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join("---" for _ in header) + " |",
+    ]
+    for r in rows:
+        md_lines.append(
+            f"| {r['model']} | {r['window']} | {r['metric']} | {r['official_mean']:.4f} "
+            f"| {r['fallback_mean']:.4f} | {r['diff_official_minus_fallback']:+.4f} |"
+        )
+    note = (
+        "对照说明：官方划分与备选划分（dHash 簇约束 + §3.3 哈希分桶）的 test 集合不同，"
+        "本表为两次独立评估的组间描述性差异（非同图配对差值 CI），仅用于量化官方划分近重复泄漏的"
+        "乐观偏置幅度；两运行严格分表不混（§8.1）。diff>0 = 官方划分下更高（乐观方向）。"
+        "备选划分上的 S2 判定仅描述性（口径裁决在 L1）。"
+    )
+    result = {
+        "rows": rows,
+        "markdown": "\n".join(md_lines),
+        "note": note,
+        "official_splits_sha256": off.get("audit", {}).get("splits_sha256", ""),
+        "fallback_splits_sha256": fbk.get("audit", {}).get("splits_sha256", ""),
+    }
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "comparison_official_vs_fallback.md").write_text(
+        f"# 官方划分 vs 备选划分对照（描述性）\n\n{note}\n\n{result['markdown']}\n", encoding="utf-8", newline="\n"
+    )
+    (out / "comparison_official_vs_fallback.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n"
+    )
+    return result
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI 入口：``python -m ui_attention.metrics.eval.ueyes_driver --dataset … --out …``。"""
     parser = argparse.ArgumentParser(
@@ -1633,6 +1917,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--profiles", nargs="*", default=["foveacast-onnx-3s-v1"], help="候选后端 profile（经 C2 registry 解析）"
     )
     parser.add_argument("--dataset-name", default="ueyes")
+    parser.add_argument(
+        "--splits-mode",
+        default="official",
+        choices=["official", "fallback_cluster"],
+        help="official=官方 image_types.csv 划分；fallback_cluster=§3.3 哈希分桶+§3.4.1 簇约束（对照补跑）",
+    )
+    parser.add_argument(
+        "--splits-file", default=SPLITS_VERSION, help="划分文件名（对照运行用 splits.v2-fallback.json）"
+    )
+    parser.add_argument("--cb-version-tag", default="v1", help="CB npz 版本标签（对照运行用 v2-fallback）")
+    parser.add_argument(
+        "--md5-verified", default=None, help="注入已验证 zip md5（同一 zip 在主运行已校验时免于重算，来源如实记录）"
+    )
+    parser.add_argument("--variant-label", default="", help="表标注（如：备选划分对照；与官方划分严格分表不混）")
+    parser.add_argument("--descriptive-verdicts", action="store_true", help="S1/S2 判定仅作描述性记录（对照运行）")
     args = parser.parse_args(argv)
 
     def prog(msg: str) -> None:
@@ -1650,6 +1949,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             dataset_name=args.dataset_name,
             windows=tuple(args.windows) if args.windows else None,
             progress_fn=prog,
+            splits_mode=args.splits_mode,
+            splits_filename=args.splits_file,
+            cb_version_tag=args.cb_version_tag,
+            dataset_md5_verified=args.md5_verified,
+            variant_label=args.variant_label,
+            verdicts_descriptive=args.descriptive_verdicts,
         )
     except UiAttentionError as exc:
         sys.stdout.write(json.dumps({"ok": False, "error": exc.to_dict()}, ensure_ascii=False, indent=2) + "\n")
@@ -1658,6 +1963,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "ok": True,
         "result": {
             "out_root": str(outputs.out_root),
+            "variant": args.variant_label or "official",
+            "splits_mode": args.splits_mode,
             "splits_sha256": outputs.splits_sha256,
             "cb_hashes": outputs.cb_hashes,
             "skipped_profiles": outputs.skipped_profiles,

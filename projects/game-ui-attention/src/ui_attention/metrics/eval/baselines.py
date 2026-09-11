@@ -72,6 +72,7 @@ class CenterBiasBaseline:
         weighting: str = "count",
         source_split: str = "train",
         source_split_hash: str = "",
+        version: str = CB_VERSION,
     ) -> CenterBiasBaseline:
         if source_split != "train":
             # 反泄漏规则 §3.4.3：基线/先验/超参只能用 train 划分估计。
@@ -114,6 +115,7 @@ class CenterBiasBaseline:
             source_split_hash=source_split_hash,
             n_fixations=n_fix,
             n_images=n_img,
+            version=version,
         )
 
     # -- 求值 ----------------------------------------------------------------

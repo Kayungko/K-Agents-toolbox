@@ -214,6 +214,29 @@ def test_nss_constant_map_zero_with_flag():
     assert r.flags["constant_map"] is True
 
 
+def test_nss_large_uniform_grid_exact_zero_regression():
+    """回归防护（2026-09-11 UEyes 实跑发现的缺陷）：大数组均匀图 std 有 ulp 级舍入，
+    常数图判定必须走逐元素 max==min，NSS 必须精确 0 而非噪声放大值（曾出现 ±1.0）。"""
+    U = uniform_baseline((667, 1110))
+    assert U.std() != 0.0  # 缺陷根源事实：大数组 np.full 的 std 非精确零
+    assert U.max() == U.min()  # 逐元素严格相等 → 正确的常数图判据
+    rng = np.random.default_rng(0)
+    pts = np.stack([rng.uniform(0, 1109, 50), rng.uniform(0, 666, 50)], axis=1)
+    fix = build_fixation_set(pts, (667, 1110))
+    r = nss(U, fix, CONFIG)
+    assert r.value == 0.0
+    assert r.flags["constant_map"] is True
+
+
+def test_cc_large_constant_side_flag():
+    U = uniform_baseline((667, 1110))
+    rng = np.random.default_rng(1)
+    F = rng.random((667, 1110))
+    r = cc(F, U, CONFIG)
+    assert r.value == 0.0
+    assert r.flags["constant_map"] is True and r.flags["constant_side"] == "S"
+
+
 def test_nss_positive_for_matching_map():
     fix = _center_fixations(seed=3)
     S = _gaussian_map(SHAPE, 40, 30)
