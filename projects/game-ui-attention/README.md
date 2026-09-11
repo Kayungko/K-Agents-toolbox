@@ -2,7 +2,7 @@
 
 游戏 UI 视觉注意力评估项目。拟定 Skill 名称：`game-ui-attention`；拟定 CLI 名称：`ui-attention`。
 
-**状态：G0 研究收敛、G1 工程闭环、G3 工具交付均已验收（2026-09-11）——CLI 四命令在真实后端（foveacast ONNX，权重 sha256 校验）上全链跑通，475 项测试通过，原创 Skill 已封装（验收记录：[G1](docs/acceptance/g1-engineering-loop.md)/[G3](docs/acceptance/g3-tool-delivery.md)）。G2（公开数据比较）待 UEyes 数据集下载批准。尚无安装包或发布物；游戏 UI 预测有效性未验证（无眼动数据）。**
+**状态：G0-G3 四阶段全部验收（2026-09-11/12）——CLI+Skill 交付、535 项测试通过、UEyes 公开基准评估完成（验收记录：[G1](docs/acceptance/g1-engineering-loop.md)/[G2](docs/acceptance/g2-comparison.md)/[G3](docs/acceptance/g3-tool-delivery.md)）。核心实测：主候选 foveacast-3s 在原生窗口显著优于中心偏置基线（IG_CB +0.552，胜率 92.6%），UI 微调较通用域 DeepGaze 增量约 1.06 bits；S2 全窗口硬门槛口径修订待一级总控裁决。尚无安装包或发布物；游戏 UI 预测有效性未验证（无眼动数据）。**
 
 ## 目标
 
@@ -34,6 +34,7 @@
 | [研究波次状态](docs/research/README.md) | 第一波研究索引与验收状态（模型候选/评估协议/环境可行性） |
 | [G1 验收记录](docs/acceptance/g1-engineering-loop.md) | 工程闭环验收：范围、实测检查、失败案例、未验证项与结论 |
 | [G3 验收记录](docs/acceptance/g3-tool-delivery.md) | 工具交付验收：AOI 重算、A/B 色阶、模型哈希、Skill 封装 |
+| [G2 验收记录](docs/acceptance/g2-comparison.md) | 公开数据比较验收：UEyes 实跑、S0-S4 判定、泄漏审计与双划分对照、缺陷披露链 |
 | [Skill](skill/game-ui-attention/SKILL.md) | 原创 game-ui-attention Skill（红线、流程、调用指南与真实运行示例） |
 
 ## 当前进展
@@ -45,7 +46,7 @@
 - [x] 锁定公开数据评估协议（G0/R2：UEyes + 七指标统一口径；评估未运行；成功判据待一级总控确认）。
 - [x] 实现并测试工程管线（G1 验收通过：CLI 四命令、契约/AOI/概率统计/评估脚本/报告渲染三线交付，475 项测试通过，真实后端全链跑通）。
 - [x] 封装实际 Skill（G3 验收通过：skill/game-ui-attention/SKILL.md+调用指南+场景规则+真实运行示例，见 [docs/acceptance/g3-tool-delivery.md](docs/acceptance/g3-tool-delivery.md)；宿主运行时行为验证属使用侧）。
-- [ ] 公开数据基准评估（G2：评估脚本就绪且 S0 合成自检通过；UEyes 12.9GB 下载待一级总控批准）。
-- [ ] 评估模型在游戏 UI 上的适用性（无眼动数据前保持未验证）。
+- [x] 公开数据基准评估（G2 验收通过：UEyes test 108 图×3 窗口×4 后端+基线，表 A-E+bootstrap CI+泄漏审计+备选划分对照；S2 按批准口径判定，口径修订待一级总控裁决；详见 [G2 记录](docs/acceptance/g2-comparison.md)）。
+- [ ] 评估模型在游戏 UI 上的适用性（无眼动数据前保持未验证；公开 UI 结果不得外推为游戏结论）。
 
 文档创建日期：2026-09-11。来源核查日期见来源记录与各研究文档（均为 2026-09-11）；硬件环境已实测（R3），模型运行兼容性未实测。
