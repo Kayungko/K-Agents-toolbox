@@ -1,0 +1,54 @@
+# Game UI Attention 最小工具（C1 唯一持有本文件；C2/C3 依赖项以提案→C1 合入）
+# 精确 pin 与 .venv 实装版本一致（2026-09-11，pip freeze 核实）。
+# lock 文件：requirements.txt（uv 未安装，使用 pip freeze 生成，见该文件头注释）。
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ui-attention"
+version = "0.1.0"
+description = "游戏 UI 视觉注意力评估最小工具：静态截图 → 显著性模型概率热图 → AOI 区域统计 → A/B 对比 → 本地报告"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy==2.5.3",
+    "pillow==12.3.0",
+]
+
+[project.optional-dependencies]
+# C2 后端推理（foveacast ONNX 主路线，runtime-feasibility §2.4 路线 A）
+onnx = [
+    "onnxruntime==1.30.0",
+]
+# 开发/测试
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.7",
+]
+# R2 公开数据评估协议（benchmark-protocol §6；scikit-image 未实装不 pin，待 C2 提案）
+eval = [
+    "scipy==1.18.1",
+]
+
+[project.scripts]
+ui-attention = "ui_attention.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# C3 报告模板资源随包分发（总控接线点②，缺失则打包丢模板）
+[tool.setuptools.package-data]
+"ui_attention.report" = ["html/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]

@@ -1,0 +1,17 @@
+# Game UI Attention lock 文件（C1 持有）
+# 生成方式：uv 未安装于本环境，改用 .venv 内 `python -m pip freeze` 生成（2026-09-11）。
+# 环境：projects/game-ui-attention/.venv，Python 3.12.10（Windows，CPU onnxruntime）。
+# 与 pyproject.toml 精确 pin 一致；含传递依赖（onnxruntime/pytest 引入）。
+colorama==0.4.6
+flatbuffers==25.12.19
+iniconfig==2.3.0
+numpy==2.5.3
+onnxruntime==1.30.0
+packaging==26.3
+pillow==12.3.0
+pluggy==1.6.0
+protobuf==7.36.1
+Pygments==2.21.0
+pytest==9.1.1
+ruff==0.16.7
+scipy==1.18.1
