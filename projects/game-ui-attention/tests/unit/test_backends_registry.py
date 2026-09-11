@@ -24,6 +24,64 @@ from ui_attention.errors import ErrorCode
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RELEASE_SHA256 = "842a23f97908d146b8749e05f6b220bdb495eae76c75cc7252550825585ef76e"
 
+WINDOW_CASES = [
+    (
+        "foveacast-onnx-1s-v1",
+        "foveacast-onnx-1s",
+        1,
+        "4b9fdc2734e36c612a120ab7b0050ae276723160ccc625c6f554e906dd6345d5",
+    ),
+    (
+        "foveacast-onnx-3s-v1",
+        "foveacast-onnx-3s",
+        3,
+        "842a23f97908d146b8749e05f6b220bdb495eae76c75cc7252550825585ef76e",
+    ),
+    (
+        "foveacast-onnx-7s-v1",
+        "foveacast-onnx-7s",
+        7,
+        "cf66388dc6fe5db4712c77cf3929d04380ed73ac963677b8c9de2b6380fb51e0",
+    ),
+]
+
+
+def test_all_three_window_profiles_registered():
+    names = list_profiles()
+    for profile_name, _, _, _ in WINDOW_CASES:
+        assert profile_name in names
+
+
+@pytest.mark.parametrize(("profile_name", "backend_id", "window_s", "sha"), WINDOW_CASES)
+def test_window_profile_fields(profile_name, backend_id, window_s, sha):
+    profile = resolve_profile(profile_name)
+    profile.validate()
+    assert profile.backend_id == backend_id
+    assert SHA256_RE.match(profile.config_hash)
+    assert profile.weights[0].sha256 == sha  # release 页 digest
+    assert profile.weights[0].size_bytes == 56549242  # 本地实测精确值
+    assert profile.viewing_conditions["viewing_window_s"] == window_s
+    assert profile.viewing_conditions["display_conditions_required"] is False
+    assert profile.preprocessing["target_height"] == 240
+    assert profile.preprocessing["target_width"] == 320
+    assert profile.centerbias is None
+    reg = registration_for(profile_name)
+    # 许可字段三窗口一致（G2 指令：同 3s）
+    assert reg.license_status["gaps"] == ["G3", "G4", "G8"]
+    assert reg.license_status["cleared_for"] == "internal-eval"
+    assert reg.attribution == ATTRIBUTION
+
+
+def test_window_config_hashes_distinct():
+    hashes = {resolve_profile(name).config_hash for name, _, _, _ in WINDOW_CASES}
+    assert len(hashes) == 3  # 权重与观看窗口不同 → 合成哈希必然不同
+
+
+def test_profile_for_backend_windows():
+    assert profile_for_backend("foveacast-onnx-1s").profile_name == "foveacast-onnx-1s-v1"
+    assert profile_for_backend("foveacast-onnx-3s").profile_name == "foveacast-onnx-3s-v1"
+    assert profile_for_backend("foveacast-onnx-7s").profile_name == "foveacast-onnx-7s-v1"
+
 
 def test_first_profile_registered():
     assert FOVEACAST_3S_PROFILE == "foveacast-onnx-3s-v1"
@@ -139,16 +197,18 @@ def test_attribution_citations_recorded():
 
 
 def test_profile_for_backend():
-    profile = profile_for_backend("foveacast-onnx-3s")
-    assert profile.profile_name == FOVEACAST_3S_PROFILE
+    assert profile_for_backend("foveacast-onnx-3s").profile_name == "foveacast-onnx-3s-v1"
+    assert profile_for_backend("foveacast-onnx-1s").profile_name == "foveacast-onnx-1s-v1"
+    assert profile_for_backend("foveacast-onnx-7s").profile_name == "foveacast-onnx-7s-v1"
+    assert profile_for_backend("deepgaze-iie").profile_name == registry.DEEPGAZE_IIE_PROFILE
     with pytest.raises(ProfileRejectedError):
-        profile_for_backend("deepgaze-iie")
+        profile_for_backend("umsi-plus-plus")  # 真正未登记的 backend
 
 
 def test_get_backend_rejects_foreign_backend_before_touching_disk():
     profile = resolve_profile(FOVEACAST_3S_PROFILE)
     foreign_hash = compute_config_hash(
-        backend_id="deepgaze-iie",
+        backend_id="umsi-plus-plus",
         backend_version=profile.backend_version,
         weights=profile.weights,
         preprocessing=profile.preprocessing,
@@ -156,7 +216,7 @@ def test_get_backend_rejects_foreign_backend_before_touching_disk():
         viewing_conditions=profile.viewing_conditions,
     )
     foreign = dataclasses.replace(
-        profile, backend_id="deepgaze-iie", config_hash=foreign_hash
+        profile, backend_id="umsi-plus-plus", config_hash=foreign_hash
     )
     with pytest.raises(ProfileRejectedError) as ei:
         registry.get_backend(foreign)

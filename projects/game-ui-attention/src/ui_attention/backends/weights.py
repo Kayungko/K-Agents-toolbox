@@ -52,14 +52,19 @@ _CHUNK_BYTES = 1024 * 1024
 _USER_AGENT = "game-ui-attention/C2 (weights.py; internal-eval)"
 
 
-def default_cache_dir() -> Path:
-    """``<project-root>/model-cache/foveacast`` (ignored dir, C2-owned).
+def cache_root() -> Path:
+    """``<project-root>/model-cache`` (ignored dir; per-backend subdirs).
 
     Resolved from this file's location: ``src/ui_attention/backends/weights.py``
     → parents[3] is the project root ``projects/game-ui-attention``.
     """
     project_root = Path(__file__).resolve().parents[3]
-    return project_root / "model-cache" / "foveacast"
+    return project_root / "model-cache"
+
+
+def default_cache_dir(subdir: str = "foveacast") -> Path:
+    """``<project-root>/model-cache/<subdir>`` (ignored dir, C2-owned)."""
+    return cache_root() / subdir
 
 
 def sha256_of_file(path: Path | str, chunk_bytes: int = _CHUNK_BYTES) -> str:
@@ -316,39 +321,45 @@ def _unlink_quietly(path: Path) -> None:
 def _main() -> int:
     """Explicit install step (canonical entry: ``python -m ui_attention.backends``).
 
-    Downloads ONLY the registered 3s FP16 artifact (single small file,
-    approved by 二级总控). 1s/7s window-sensitivity weights are NOT fetched
-    (medium volume, pending approval). Exit 0 on success, 3 on structured
-    failure (mirrors CLI exit semantics for weight-not-ready).
+    Downloads every weight of every registered profile into its
+    ``cache_root()/<cache_subdir>`` (all currently registered artifacts are
+    approved: foveacast 3s @G0, foveacast 1s/7s @G2, DeepGaze IIE @G1'
+    internal-eval only). Nothing outside the registry is ever fetched.
+    Exit 0 on success/cache hit, 3 on structured failure (mirrors CLI exit
+    semantics for weight-not-ready).
     """
-    from .registry import FOVEACAST_3S_PROFILE, resolve_profile
+    from . import registry as _registry
 
-    profile = resolve_profile(FOVEACAST_3S_PROFILE)
-    cache_dir = default_cache_dir()
     failures = 0
-    for ref in profile.weights:
-        try:
-            result = fetch_weight(ref, cache_dir)
-        except BackendError as exc:
-            failures += 1
-            print(json.dumps(exc.to_dict(), ensure_ascii=False))
-            continue
-        write_provenance(result, ref, cache_dir)
-        print(
-            json.dumps(
-                {
-                    "ok": True,
-                    "name": result.name,
-                    "path": str(result.path),
-                    "sha256": result.sha256,
-                    "size_bytes": result.size_bytes,
-                    "source": result.source,
-                    "elapsed_s": result.elapsed_s,
-                },
-                ensure_ascii=False,
+    fetched = 0
+    for profile_name in _registry.list_profiles():
+        profile = _registry.resolve_profile(profile_name)
+        registration = _registry.registration_for(profile_name)
+        cache_dir = cache_root() / registration.cache_subdir
+        for ref in profile.weights:
+            try:
+                result = fetch_weight(ref, cache_dir)
+            except BackendError as exc:
+                failures += 1
+                print(json.dumps(exc.to_dict(), ensure_ascii=False))
+                continue
+            fetched += 1
+            write_provenance(result, ref, cache_dir)
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "name": result.name,
+                        "path": str(result.path),
+                        "sha256": result.sha256,
+                        "size_bytes": result.size_bytes,
+                        "source": result.source,
+                        "elapsed_s": result.elapsed_s,
+                    },
+                    ensure_ascii=False,
+                )
             )
-        )
-    return 0 if failures == 0 else 3
+    return 0 if failures == 0 and fetched > 0 else 3
 
 
 if __name__ == "__main__":  # pragma: no cover

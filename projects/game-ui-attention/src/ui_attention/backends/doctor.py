@@ -35,7 +35,7 @@ from typing import Any
 
 from . import registry
 from .errors import BackendError, WeightNotReadyError
-from .weights import default_cache_dir, verify_cached_weight
+from .weights import cache_root, verify_cached_weight
 
 __all__ = [
     "DoctorCheck",
@@ -246,9 +246,13 @@ def probe_weights(
     """Weight existence + sha256 == registered value (offline, no download).
 
     Failure → ``MODEL_NOT_READY`` (exit 3), details.reason per weight.
+    cache_dir 缺省时按登记项的 ``cache_subdir`` 解析（foveacast/deepgaze）。
     """
-    cache_dir = Path(cache_dir) if cache_dir is not None else default_cache_dir()
     registration = registry.registration_for(profile_name)
+    if cache_dir is None:
+        cache_dir = cache_root() / registration.cache_subdir
+    else:
+        cache_dir = Path(cache_dir)
     entries: list[dict[str, Any]] = []
     failure: WeightNotReadyError | None = None
     for ref in registration.profile.weights:

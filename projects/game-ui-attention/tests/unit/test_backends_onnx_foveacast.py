@@ -26,10 +26,20 @@ from ui_attention.contracts.backend import Backend, PredictionResult
 from ui_attention.errors import ErrorCode
 
 PROFILE = registry.resolve_profile(registry.FOVEACAST_3S_PROFILE)
+PROFILE_1S = registry.resolve_profile(registry.FOVEACAST_1S_PROFILE)
+PROFILE_7S = registry.resolve_profile(registry.FOVEACAST_7S_PROFILE)
 WEIGHT_PATH = default_cache_dir() / registry.FOVEACAST_3S_WEIGHT.name
 HAS_WEIGHTS = WEIGHT_PATH.is_file()
+HAS_1S_WEIGHTS = (default_cache_dir() / registry.FOVEACAST_1S_WEIGHT.name).is_file()
+HAS_7S_WEIGHTS = (default_cache_dir() / registry.FOVEACAST_7S_WEIGHT.name).is_file()
 needs_weights = pytest.mark.skipif(
     not HAS_WEIGHTS, reason="real weights not cached (run python -m ui_attention.backends)"
+)
+needs_1s_weights = pytest.mark.skipif(
+    not HAS_1S_WEIGHTS, reason="1s real weights not cached (run python -m ui_attention.backends)"
+)
+needs_7s_weights = pytest.mark.skipif(
+    not HAS_7S_WEIGHTS, reason="7s real weights not cached (run python -m ui_attention.backends)"
 )
 
 RELEASE_SHA256 = "842a23f97908d146b8749e05f6b220bdb495eae76c75cc7252550825585ef76e"
@@ -85,7 +95,12 @@ def ramp_output(h: int = 240, w: int = 320, dtype=np.float32):
     return lambda feeds: [plane]
 
 
-def make_backend(monkeypatch: pytest.MonkeyPatch, session: FakeSession, cache_dir: Path) -> FoveacastOnnxBackend:
+def make_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    session: FakeSession,
+    cache_dir: Path,
+    backend_id: str = "foveacast-onnx-3s",
+) -> FoveacastOnnxBackend:
     """Backend with weight verification and ORT session creation faked out."""
 
     def fake_verify(ref, _cache_dir):
@@ -99,7 +114,7 @@ def make_backend(monkeypatch: pytest.MonkeyPatch, session: FakeSession, cache_di
 
     monkeypatch.setattr("ui_attention.backends.onnx_foveacast.verify_cached_weight", fake_verify)
     monkeypatch.setattr("onnxruntime.InferenceSession", lambda path, providers=None: session)
-    return FoveacastOnnxBackend(cache_dir=cache_dir)
+    return FoveacastOnnxBackend(backend_id=backend_id, cache_dir=cache_dir)
 
 
 def ui_image(h: int = 120, w: int = 200, seed: int = 7) -> np.ndarray:
@@ -448,3 +463,49 @@ def test_real_describe_weights_digest_matches_release_page():
     info = FoveacastOnnxBackend().describe()
     assert info.weights[0].sha256 == RELEASE_SHA256
     assert info.weights[0].size_bytes == registry.FOVEACAST_3S_WEIGHT.size_bytes
+
+
+# ---------------------------------------------------------------------------
+# Window variants (1s/3s/7s, G2 批准)
+# ---------------------------------------------------------------------------
+
+
+def test_window_variant_1s_with_fake_session(monkeypatch, tmp_path):
+    session = FakeSession(ramp_output())
+    backend = make_backend(monkeypatch, session, tmp_path, backend_id="foveacast-onnx-1s")
+    result = backend.predict(ui_image(), PROFILE_1S)
+    assert result.semantics == "probability_density"
+    assert abs(float(result.array.sum()) - 1.0) < 1e-12
+    info = backend.describe()
+    assert info.backend_id == "foveacast-onnx-1s"
+    assert info.weights[0].sha256 == registry.FOVEACAST_1S_WEIGHT.sha256
+
+
+def test_default_backend_rejects_1s_profile(monkeypatch, tmp_path):
+    backend = make_backend(monkeypatch, FakeSession(ramp_output()), tmp_path)
+    with pytest.raises(ProfileRejectedError) as ei:
+        backend.predict(ui_image(), PROFILE_1S)
+    assert ei.value.details["reason"] == "backend_mismatch"
+
+
+def test_ctor_rejects_unknown_backend_id(tmp_path):
+    with pytest.raises(ProfileRejectedError):
+        FoveacastOnnxBackend(cache_dir=tmp_path, backend_id="deepgaze-iie")
+
+
+@needs_1s_weights
+def test_real_1s_weights_end_to_end():
+    backend = registry.get_backend(PROFILE_1S)
+    result = backend.predict(ui_image(60, 80, seed=17), PROFILE_1S)
+    assert result.array.dtype == np.float64
+    assert result.array.shape == (240, 320)
+    assert abs(float(result.array.sum()) - 1.0) < 1e-9
+
+
+@needs_7s_weights
+def test_real_7s_weights_end_to_end():
+    backend = registry.get_backend(PROFILE_7S)
+    result = backend.predict(ui_image(60, 80, seed=19), PROFILE_7S)
+    assert result.array.dtype == np.float64
+    assert result.array.shape == (240, 320)
+    assert abs(float(result.array.sum()) - 1.0) < 1e-9

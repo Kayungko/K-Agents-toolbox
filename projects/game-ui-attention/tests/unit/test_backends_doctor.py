@@ -208,3 +208,38 @@ def test_registry_doctor_report_entry_point():
     payload = registry.doctor_report()
     assert payload["ok"] is True
     assert isinstance(payload["checks"], list) and len(payload["checks"]) == 4
+
+
+@pytest.mark.parametrize(
+    "profile_name",
+    ["foveacast-onnx-1s-v1", "foveacast-onnx-7s-v1"],
+)
+def test_run_doctor_window_variants(profile_name):
+    weight_name = registry.registration_for(profile_name).profile.weights[0].name
+    if not (default_cache_dir() / weight_name).is_file():
+        pytest.skip(f"{weight_name} not cached (run python -m ui_attention.backends)")
+    report = run_doctor(profile_name)
+    assert report.ok is True, report.to_dict()
+    assert report.profile_name == profile_name
+
+
+def test_probe_license_deepgaze_internal_eval_ok_but_packaged_blocked():
+    check = probe_license(registry.DEEPGAZE_IIE_PROFILE)
+    assert check.status == "ok"  # G1' 批准仅限 internal-eval
+    assert check.details["license_status"]["gaps"] == ["G1", "G2", "G5"]
+    blocked = probe_license(registry.DEEPGAZE_IIE_PROFILE, required_cleared_for="packaged")
+    assert blocked.status == "fail"
+    assert blocked.error_code == "LICENSE_NOT_CLEARED"
+
+
+def test_run_doctor_deepgaze_profile():
+    from ui_attention.backends.weights import cache_root
+
+    registration = registry.registration_for(registry.DEEPGAZE_IIE_PROFILE)
+    cache = cache_root() / registration.cache_subdir
+    if not all((cache / w.name).is_file() for w in registration.profile.weights):
+        pytest.skip("deepgaze weights not cached (internal-eval line)")
+    report = run_doctor(registry.DEEPGAZE_IIE_PROFILE)
+    assert report.ok is True, report.to_dict()
+    weights_check = next(c for c in report.checks if c.name == "weights")
+    assert weights_check.details["cache_dir"] == str(cache)

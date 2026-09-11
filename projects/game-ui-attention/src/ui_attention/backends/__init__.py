@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+from .deepgaze_iie import DeepGazeIIEBackend
 from .doctor import DoctorCheck, DoctorReport, run_doctor
 from .errors import (
     BackendError,
@@ -31,6 +32,7 @@ from .errors import (
 from .onnx_foveacast import FoveacastOnnxBackend
 from .registry import (
     ATTRIBUTION,
+    DEEPGAZE_IIE_PROFILE,
     FOVEACAST_3S_PROFILE,
     LICENSE_RECORD,
     ProfileRegistration,
@@ -52,9 +54,11 @@ from .weights import (
 
 __all__ = [
     "ATTRIBUTION",
+    "DEEPGAZE_IIE_PROFILE",
     "FOVEACAST_3S_PROFILE",
     "LICENSE_RECORD",
     "BackendError",
+    "DeepGazeIIEBackend",
     "DoctorCheck",
     "DoctorReport",
     "DownloadFailureError",

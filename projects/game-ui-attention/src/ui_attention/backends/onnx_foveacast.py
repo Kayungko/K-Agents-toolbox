@@ -78,9 +78,14 @@ _SUM_TOLERANCE = 1e-9
 
 
 class FoveacastOnnxBackend:
-    """Adapter for the foveacast v0.2.0 3s FP16 ONNX artifact (CPU only)."""
+    """Adapter for the foveacast v0.2.0 FP16 ONNX artifacts (CPU only).
 
-    BACKEND_ID = registry.FOVEACAST_3S_BACKEND_ID
+    同一适配层服务三个观看窗口变体（1s/3s/7s，同架构同预处理，仅权重与
+    profile 观看假设不同）：``backend_id`` 由构造参数指定（默认 3s 主用），
+    ``registry.get_backend`` 按 profile 传入 ``foveacast-onnx-{1s,3s,7s}``。
+    """
+
+    BACKEND_ID = registry.FOVEACAST_3S_BACKEND_ID  # default (3s 主用窗口)
     VERSION = registry.FOVEACAST_3S_BACKEND_VERSION
     SEMANTICS = "probability_density"
 
@@ -97,7 +102,15 @@ class FoveacastOnnxBackend:
         self,
         cache_dir: Path | str | None = None,
         providers: tuple[str, ...] = ("CPUExecutionProvider",),
+        backend_id: str = BACKEND_ID,
     ) -> None:
+        if backend_id not in registry.FOVEACAST_BACKEND_IDS:
+            raise ProfileRejectedError(
+                f"backend_id {backend_id!r} is not a registered foveacast window variant",
+                {"backend_id": backend_id, "supported": list(registry.FOVEACAST_BACKEND_IDS)},
+                reason="backend_mismatch",
+            )
+        self.backend_id = backend_id
         self._cache_dir = Path(cache_dir) if cache_dir is not None else default_cache_dir()
         self._providers = list(providers)
         self._session: Any = None
@@ -112,10 +125,10 @@ class FoveacastOnnxBackend:
 
     def describe(self) -> BackendInfo:
         """Backend self-description built from the registered profile (read-only)."""
-        profile = registry.profile_for_backend(self.BACKEND_ID)
+        profile = registry.profile_for_backend(self.backend_id)
         registration = registry.registration_for(profile.profile_name)
         info = BackendInfo(
-            backend_id=self.BACKEND_ID,
+            backend_id=self.backend_id,
             version=self.VERSION,
             capabilities=("spatial_density",),
             native_semantics=self.SEMANTICS,
@@ -224,13 +237,13 @@ class FoveacastOnnxBackend:
                 reason="profile_type",
             )
         registry.verify_profile_integrity(resolved_profile)
-        if resolved_profile.backend_id != self.BACKEND_ID:
+        if resolved_profile.backend_id != self.backend_id:
             raise ProfileRejectedError(
                 f"profile {resolved_profile.profile_name!r} targets backend "
-                f"{resolved_profile.backend_id!r}, not {self.BACKEND_ID!r}",
+                f"{resolved_profile.backend_id!r}, not {self.backend_id!r}",
                 {
                     "profile_backend_id": resolved_profile.backend_id,
-                    "expected_backend_id": self.BACKEND_ID,
+                    "expected_backend_id": self.backend_id,
                 },
                 reason="backend_mismatch",
             )
