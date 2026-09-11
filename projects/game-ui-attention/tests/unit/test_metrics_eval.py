@@ -602,11 +602,28 @@ def test_s0_can_be_disabled_explicitly():
     assert s0_self_check(cfg) == {"skipped": True}
 
 
-def test_s1_to_s4_default_disabled_pending_confirmation():
+def test_success_criteria_l1_approved_state():
+    """L1 批准 2026-09-11（全部批准）后的判据配置态（原"默认关闭待确认"测试按批准口径更新）。"""
     crit = EvalConfig().criteria
-    assert crit.s0_enabled is True
-    assert (crit.s1_enabled, crit.s2_enabled, crit.s3_enabled, crit.s4_enabled) == (False, False, False, False)
-    assert "待一级总控确认" in crit.pending_confirmation_note
+    assert crit.s0_enabled is True  # S0 管线自检门恒开
+    # S1-S3 按 R2 建议值启用
+    assert (crit.s1_enabled, crit.s2_enabled, crit.s3_enabled) == (True, True, True)
+    # S2 为后端选型硬门槛：每窗口 IG_CB 与 NSS 配对差值 vs CB 的 95% CI 下界 > 0
+    assert crit.s2_metrics == ("IG_CB", "NSS")
+    assert crit.s2_ci_lower_min == 0.0
+    assert crit.s1_metrics == ("NSS", "sAUC")
+    # S4 本轮不设（UMSI++ 不跑，仅文献参考表）：关闭且无定量阈值
+    assert crit.s4_enabled is False
+    assert crit.s4_ig_ratio_min is None
+    # 批准标注存在且可追溯
+    assert "L1 批准 2026-09-11" in crit.approval_note
+    assert "S2 为后端选型硬门槛" in crit.approval_note
+    assert "FiWI 不纳入" in crit.approval_note
+    # 冻结阈值与批准口径一致（近重复 Hamming≤8、注视<10、观看者<3）
+    cfg = EvalConfig()
+    assert (cfg.dup_hamming_max, cfg.min_fixations, cfg.min_viewers) == (8, 10, 3)
+    assert cfg.weighting == "count"  # 计数加权默认（时长加权仅敏感性行）
+    assert "L1 approved 2026-09-11" in cfg.l1_approval
 
 
 # ---------------------------------------------------------------------------

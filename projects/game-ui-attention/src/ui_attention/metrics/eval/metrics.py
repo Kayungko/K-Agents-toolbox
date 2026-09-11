@@ -163,14 +163,26 @@ def sauc(
 
     负样本默认取全部；``sauc_negative_multiplier`` 设置时按固定种子抽样
     M = multiplier × |Φ|（记录种子，入配置哈希）。
+
+    跨分辨率口径（UEyes 图像尺寸不一）：其他图像注视点落在当前图网格外的，
+    按"越界丢弃"惯例剔除并计数（flags.n_neg_dropped_oob），不折算坐标。
     """
     S = np.asarray(S_raw, dtype=np.float64)
     pos_scores = _fixation_samples(S, fix_pos) if len(fix_pos) else np.empty(0)
-    neg_scores = _fixation_samples(S, fix_neg) if len(fix_neg) else np.empty(0)
+    n_neg_dropped = 0
+    if len(fix_neg):
+        h, w = S.shape
+        xi, yi = pixel_indices(fix_neg)
+        inside = (xi >= 0) & (xi < w) & (yi >= 0) & (yi < h)
+        n_neg_dropped = int(np.count_nonzero(~inside))
+        neg_scores = S[yi[inside], xi[inside]]
+    else:
+        neg_scores = np.empty(0)
     if config.sauc_negative_multiplier is not None and len(fix_pos):
         m = int(config.sauc_negative_multiplier * len(fix_pos))
         neg_scores = _subsample(neg_scores, m, config.sampling_seed)
     auc, flags = _auc_from_scores(pos_scores, neg_scores)
+    flags["n_neg_dropped_oob"] = n_neg_dropped
     return MetricResult("sAUC", auc, flags)
 
 

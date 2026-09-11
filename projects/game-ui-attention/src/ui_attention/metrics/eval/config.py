@@ -33,8 +33,10 @@ WINDOWS_DEFAULT: tuple[str, ...] = ("1s", "3s", "7s")
 class SuccessCriteria:
     """阶段性成功判据（§8.3：全部为建议值，待一级总控确认）。
 
-    S0 管线自检默认开启（脚本自检门，不属于"模型是否合格"判断）；
-    S1-S4 默认关闭——**不得硬编码为通过标准**，一级总控确认后经配置开启。
+    S0 管线自检默认开启（脚本自检门，不属于"模型是否合格"判断）。
+    S1-S4 状态（**L1 批准 2026-09-11，"全部批准"口径**）：
+    S1/S2/S3 按 R2 建议值启用（S2 为后端选型硬门槛）；S4 本轮不设
+    （UMSI++ 不跑，作者报告值仅进独立文献参考表，不混表）。
     """
 
     # S0：均匀基线 NSS≈0 / AUC≈0.5 / IG_U≈0；CB 的 IG_CB≈0（定义自洽）。不过 → 脚本缺陷，禁止出报告。
@@ -43,23 +45,28 @@ class SuccessCriteria:
     s0_auc_tol: float = 1e-9
     s0_ig_tol: float = 1e-9
 
-    # S1 基线有效性：CB 的 NSS/sAUC 配对差值 CI 下界 > 0（vs 均匀）。待一级总控确认，默认关闭。
-    s1_enabled: bool = False
+    # S1 基线有效性：每窗口 CB 的 NSS 与 sAUC 配对差值 CI 下界 > 0（vs 均匀）。L1 批准启用。
+    s1_enabled: bool = True
     s1_ci_lower_min: float = 0.0
+    s1_metrics: tuple[str, ...] = ("NSS", "sAUC")
 
-    # S2 候选及格线：每窗口 IG_CB 与 NSS 配对差值（vs CB）95% CI 下界 > 0。待一级总控确认，默认关闭。
-    s2_enabled: bool = False
+    # S2 候选及格线（后端选型硬门槛）：每窗口 IG_CB 与 NSS 配对差值（vs CB）95% CI 下界 > 0；
+    # 任一窗口不达标 → 只能表述为"在公开 UI 数据上未显著优于中心偏置基线"。L1 批准启用。
+    s2_enabled: bool = True
     s2_ci_lower_min: float = 0.0
+    s2_metrics: tuple[str, ...] = ("IG_CB", "NSS")
 
-    # S3 跨域一致性（定性）。待一级总控确认，默认关闭。
-    s3_enabled: bool = False
+    # S3 跨域一致性（定性）。L1 批准启用；但 FiWI 不纳入（许可未核实，L1 批准口径）→
+    # 本轮判定为 not_applicable（缺对照数据集，不判失败也不判通过）。
+    s3_enabled: bool = True
 
-    # S4 相对 UMSI++ 水平（暂缓定量）。留待一级总控裁决，默认关闭。
+    # S4 相对 UMSI++ 水平：本轮不设（L1 批准口径：UMSI++ 不跑，仅文献参考表）。
     s4_enabled: bool = False
-    s4_ig_ratio_min: float | None = None  # 例如 0.9 = "IG 达到其 90%"，未裁决前不设数
+    s4_ig_ratio_min: float | None = None
 
-    pending_confirmation_note: str = (
-        "S1-S4 阈值来自 R2 研究建议（benchmark-protocol §8.3），待一级总控确认后启用；默认关闭，不作为通过标准"
+    approval_note: str = (
+        "S0-S4 按 R2 建议采纳：L1 批准 2026-09-11（全部批准）。S2 为后端选型硬门槛；"
+        "S3 因 FiWI 不纳入而 not_applicable；S4 本轮不设（UMSI++ 不跑，文献值仅进独立参考表不混表）"
     )
 
 
@@ -99,6 +106,19 @@ class EvalConfig:
     # CB 基线构造（§4.2：bin 64×64、σ_bin=1）
     cb_bins: int = 64
     cb_sigma_bin: float = 1.0
+
+    # 冻结阈值（L1 批准 2026-09-11：§3.4.1 近重复 Hamming≤8；§3.5 排除门槛 注视<10/观看者<3）
+    dup_hamming_max: int = 8
+    min_fixations: int = 10
+    min_viewers: int = 3
+
+    # 批准与决策记录（进表 E；对外报告可公开）
+    l1_approval: str = (
+        "L1 approved 2026-09-11（全部批准）：S0-S4 按 R2 建议采纳；"
+        "计数加权为默认（时长加权仅敏感性行不混表）；IG 双基线（IG_CB 主报+IG_U）；"
+        "sAUC=shuffled-fixations 口径；FiWI 不纳入（许可未核实）；"
+        "冻结阈值 近重复Hamming≤8/注视<10/观看者<3；S4 本轮不设（UMSI++ 不跑）"
+    )
 
     # bootstrap（§7.2）
     bootstrap_b: int = BOOTSTRAP_B_DEFAULT
