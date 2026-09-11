@@ -25,9 +25,11 @@
 
 | 代号 | 范围 | 独占产物 | 状态 |
 | --- | --- | --- | --- |
-| C1 | 契约 schema、AOI、概率统计、错误语义、评估脚本；共享文件（pyproject/cli.py/errors.py/fixtures）唯一持有者 | src/ui_attention/{contracts,aoi,metrics}/、cli.py、errors.py、imaging.py、pyproject.toml、tests/fixtures/ | 进行中（两阶段回报：contracts 完成即报） |
-| C2 | 后端隔离环境维护、foveacast ONNX 下载校验/注册/doctor/推理适配、运行实测 | src/ui_attention/backends/、model-cache/（忽略） | 进行中（仅 3s FP16 单文件 53.9MB 已批） |
-| C3 | 本地报告、区域导出、A/B 共用色阶、HTML 安全渲染 | src/ui_attention/report/ | 进行中 |
-| Skill | 原创 game-ui-attention Skill 封装 | 待定 | 未派发（G1 工程闭环验收后） |
+| C1 | 契约 schema、AOI、概率统计、错误语义、评估脚本；共享文件（pyproject/cli.py/errors.py/fixtures）唯一持有者 | src/ui_attention/{contracts,aoi,metrics}/、cli.py、errors.py、imaging.py、pyproject.toml、tests/fixtures/ | **已验收**（276 单测+接线核验，G1 记录） |
+| C2 | 后端隔离环境维护、foveacast ONNX 下载校验/注册/doctor/推理适配、运行实测 | src/ui_attention/backends/、model-cache/（忽略） | **已验收**（82 单测+sha256 独立复算一致+实测数字，G1 记录） |
+| C3 | 本地报告、区域导出、A/B 共用色阶、HTML 安全渲染 | src/ui_attention/report/ | **已验收**（110 单测+HTML 安全抽查，G1 记录） |
+| S1 | 原创 game-ui-attention Skill 封装 | skill/ | **已验收**（红线全覆盖+示例复跑数值逐字一致，G3 记录） |
+
+验收记录：[G1 工程闭环](../acceptance/g1-engineering-loop.md)、[G3 工具交付](../acceptance/g3-tool-delivery.md)。G2（比较可信）待一级总控批准 UEyes 下载后由 metrics/eval 评估脚本执行。
 
 许可门禁不变：DeepGaze 线待一级总控 G1 裁决（C2 禁止安装 torch）；UEyes 12.9GB 下载待批准（C1 eval 以合成数据自测）；跨线整合与 tests/integration/ 由 L2 串行处理。

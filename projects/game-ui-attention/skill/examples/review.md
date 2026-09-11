@@ -1,0 +1,50 @@
+# 语义评审：合成"奖励结算"界面（基线版）
+
+> **声明：本评审全部基于模型预测注意力分布（backend `foveacast-onnx-3s`，profile `foveacast-onnx-3s-v1`，analysis_id `analysis-20260911T115312Z-659682f5`），不是真实眼动数据。**
+> 模型训练分布不含游戏 UI，游戏界面预测有效性未验证；`title-halo` 为 Agent 候选区域，相关结论基于候选边界。
+> 本文是 `review.json` 的呈现（四段式：观察证据 → 目标关系 → 影响推断 → 最小建议），未添加 review.json 之外的数值；数值记录以运行目录 `analysis.json` 为准（展示舍入到 4 位小数）。
+> 玩家目标：『先查看奖励内容，再找到领取入口完成领取』。示例图片为纯代码合成的抽象界面，非真实游戏截图。
+
+## f1-reward-row-focus（evidence_type: computed）
+
+- **区域**：reward-row ｜ **证据引用**：analysis.json#/regions/reward-row/probability_mass、…/relative_density、overlay.png
+- **观察证据**：analysis.json 记录 reward-row（奖励槽三格，manual/confirmed）probability_mass=0.2602、area_fraction=0.0598、relative_density=4.3517；overlay.png 中该区域处于热图高值带（展示性观察，数值以 analysis.json 记录为准）。
+- **目标关系**：本例玩家目标为『先查看奖励内容，再找到领取入口』，奖励区域是预测分布的核心之一（相对密度明显高于全图基准 1），目标第一步在预测分布中获得对应视觉权重。
+- **影响推断**：这是预测分布内的相对关系，不代表真实玩家观看行为。
+- **最小建议**：维持奖励槽当前视觉处理；若要确认『先看奖励』在真实玩家中成立，需采集眼动或可用性测试数据后再下结论。
+- **验证缺口**：游戏 UI 上的真实注视表现未验证（无眼动数据；后端训练分布不含游戏 UI）。
+
+## f2-claim-button-weak（evidence_type: computed）
+
+- **区域**：claim-button、title、reward-row ｜ **证据引用**：analysis.json#/regions/claim-button/probability_mass、…/relative_density、…/title/relative_density、…/reward-row/relative_density
+- **观察证据**：claim-button（领取按钮，manual/confirmed，area_fraction=0.0231）记录 probability_mass=0.0477、relative_density=2.0619；同次运行 title 的 relative_density=11.6176、reward-row=4.3517，领取按钮的相对密度低于二者。
+- **目标关系**：领取是玩家目标的收尾步骤，预测分布中领取按钮不是画面视觉重心，其单位面积吸引力低于标题与奖励区。
+- **影响推断**：若真实观看与预测方向一致，玩家可能需要额外扫视才能定位领取入口——该推断未经行为验证，不得据此断言『玩家看不到按钮』或任何点击率结论。
+- **最小建议**：制作一个领取按钮变体（放大/提亮/加强与面板背景对比），在同画布、同 profile 下重新 analyze 并 compare，查看 delta_pp 是否朝预期方向变化；不得基于单次预测下领取效率结论。
+- **验证缺口**：按钮可发现性与真实领取效率的关系需 A/B 行为数据或可用性测试；本评审只展示分析方法。
+
+## f3-halo-candidate-competition（evidence_type: computed；基于候选边界）
+
+- **区域**：title-halo（agent/candidate）、title ｜ **证据引用**：analysis.json#/regions/title-halo/probability_mass、…/relative_density、analysis.json#region_union、analysis.json#limitations、regions.json#title-halo
+- **观察证据**：title-halo 为 Agent 自动识别的候选区域（source=agent、status=candidate，本条结论基于候选边界），记录 probability_mass=0.5320、area_fraction=0.0810、relative_density=6.5667；其与 title 重叠，region_union（掩码并集去重，overlap_dedup_px=10752）记录 probability_mass=0.8758。limitations 记录：原始输出为逐图 min-max 相对量，跨图绝对强度不可比。
+- **目标关系**：超过一半概率质量集中在标题及其周围庆祝光晕区，预测注意力结构与『奖励→领取』的目标路径呈同区强中心。
+- **影响推断**：庆祝光效放大了标题区视觉权重——既可能是结算界面的预期氛围营造（合法诉求，见场景规则），也可能挤压奖励细节与领取入口的预测注意力；两种解释无法仅凭预测分布区分。
+- **最小建议**：请人工确认 title-halo 边界（升级为 confirmed 或修正几何）；评审时把『光晕强度』列为可调设计变量，用减弱光晕的变体做敏感性对比（本示例 compare 演示了该方法）。
+- **验证缺口**：候选边界未经人工确认；光晕对奖励阅读的竞争影响是否在真实玩家任务中成立，需带任务的眼动或可用性验证。
+
+## f4-close-unobtrusive（evidence_type: computed）
+
+- **区域**：close-button ｜ **证据引用**：analysis.json#/regions/close-button/probability_mass、…/relative_density
+- **观察证据**：close-button（关闭按钮，manual/confirmed，area_fraction=0.0020）记录 probability_mass=0.0041、relative_density=2.0798。
+- **目标关系**：关闭入口不是本任务目标，其质量占比极低，符合『逃逸出口不应抢占注意力』的设计经验规则（场景规则，非验证结论）。
+- **影响推断**：预测分布层面未见问题信号。
+- **最小建议**：无需调整，保持现状。
+- **验证缺口**：无（validation_needed=false）。
+
+## f5-scope-unverified（evidence_type: unverified）
+
+- **区域**：（全图性声明） ｜ **证据引用**：analysis.json#limitations、analysis.json#model、analysis.json#profile
+- **观察证据**：analysis.json limitations 记录：训练分布为 2020-2022 西方语言桌面/移动 UI，不含游戏 UI，效果未验证；输入分辨率上限 240×320，小元素可能无法解析；作者公布指标未经本项目复现。本评审全部基于单次模型预测分布（backend foveacast-onnx-3s，profile foveacast-onnx-3s-v1）。
+- **目标关系与影响推断**：上述所有相对关系仅为预测分布内的参考信息，不构成对真实玩家注视顺序、注视时长或领取率的断言；在取得独立眼动评估前，本工具对游戏 UI 的预测有效性保持未验证。
+- **最小建议**：对外引用任何结论前附『模型预测、未经游戏 UI 验证』声明；需要支撑设计决策时，安排眼动采集或可用性测试。
+- **验证缺口**：游戏 UI 预测一致性需独立眼动数据验证（validation-plan §4.2）。

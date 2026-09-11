@@ -1,0 +1,57 @@
+{
+  "schema_version": "game-ui-attention-request/v1",
+  "image": "./synthetic-reward-summary-v2.png",
+  "player_goal": "玩家刚结束对局进入奖励结算界面：先查看奖励内容，再找到领取入口完成领取",
+  "screen_type": "reward-summary",
+  "backend_profile": "foveacast-onnx-3s-v1",
+  "regions": [
+    {
+      "id": "title",
+      "label": "结算标题条",
+      "role": "title",
+      "geometry": {"type": "rect", "x": 360, "y": 100, "width": 240, "height": 44},
+      "source": "manual",
+      "status": "confirmed"
+    },
+    {
+      "id": "reward-row",
+      "label": "奖励槽三格",
+      "role": "reward-content",
+      "geometry": {"type": "rect", "x": 340, "y": 190, "width": 310, "height": 100},
+      "source": "manual",
+      "status": "confirmed"
+    },
+    {
+      "id": "deco-band",
+      "label": "装饰光效带",
+      "role": "decoration",
+      "geometry": {"type": "rect", "x": 320, "y": 330, "width": 320, "height": 30},
+      "source": "manual",
+      "status": "confirmed"
+    },
+    {
+      "id": "claim-button",
+      "label": "领取按钮（变体：放大并提亮）",
+      "role": "primary-action",
+      "geometry": {"type": "rect", "x": 360, "y": 368, "width": 240, "height": 72},
+      "source": "manual",
+      "status": "confirmed"
+    },
+    {
+      "id": "close-button",
+      "label": "关闭按钮",
+      "role": "close",
+      "geometry": {"type": "rect", "x": 614, "y": 84, "width": 32, "height": 32},
+      "source": "manual",
+      "status": "confirmed"
+    },
+    {
+      "id": "title-halo",
+      "label": "标题周围光晕（Agent 自动识别）",
+      "role": "decoration",
+      "geometry": {"type": "rect", "x": 340, "y": 40, "width": 280, "height": 150},
+      "source": "agent",
+      "status": "candidate"
+    }
+  ]
+}

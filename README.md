@@ -6,7 +6,7 @@
 
 | 项目 | 用途 | 当前状态 |
 | --- | --- | --- |
-| [Game UI Attention](projects/game-ui-attention/README.md) | 游戏 UI 视觉注意力预测、重点区域统计与视觉层级评审 | G1 工程闭环（CLI 真实后端跑通、475 测试通过）；游戏 UI 有效性未验证、未发布 |
+| [Game UI Attention](projects/game-ui-attention/README.md) | 游戏 UI 视觉注意力预测、重点区域统计与视觉层级评审 | G0/G1/G3 已验收（CLI+Skill 交付，475 测试通过）；G2 待基准数据批准；游戏 UI 有效性未验证、未发布 |
 
 ## 目录约定
 

@@ -2,7 +2,7 @@
 
 游戏 UI 视觉注意力评估项目。拟定 Skill 名称：`game-ui-attention`；拟定 CLI 名称：`ui-attention`。
 
-**状态：G1 工程闭环达成（2026-09-11）——CLI 四命令在真实后端（foveacast ONNX，权重 sha256 校验）上全链跑通，475 项测试通过（验收记录：[docs/acceptance/g1-engineering-loop.md](docs/acceptance/g1-engineering-loop.md)）。尚无安装包或发布物；游戏 UI 预测有效性未验证（无眼动数据）；公开数据基准评估（G2）待 UEyes 数据集下载批准。**
+**状态：G0 研究收敛、G1 工程闭环、G3 工具交付均已验收（2026-09-11）——CLI 四命令在真实后端（foveacast ONNX，权重 sha256 校验）上全链跑通，475 项测试通过，原创 Skill 已封装（验收记录：[G1](docs/acceptance/g1-engineering-loop.md)/[G3](docs/acceptance/g3-tool-delivery.md)）。G2（公开数据比较）待 UEyes 数据集下载批准。尚无安装包或发布物；游戏 UI 预测有效性未验证（无眼动数据）。**
 
 ## 目标
 
@@ -33,6 +33,8 @@
 | [分级执行计划](docs/orchestration-plan.md) | 一级/二级总控职责、子任务分工和阶段验收 |
 | [研究波次状态](docs/research/README.md) | 第一波研究索引与验收状态（模型候选/评估协议/环境可行性） |
 | [G1 验收记录](docs/acceptance/g1-engineering-loop.md) | 工程闭环验收：范围、实测检查、失败案例、未验证项与结论 |
+| [G3 验收记录](docs/acceptance/g3-tool-delivery.md) | 工具交付验收：AOI 重算、A/B 色阶、模型哈希、Skill 封装 |
+| [Skill](skill/game-ui-attention/SKILL.md) | 原创 game-ui-attention Skill（红线、流程、调用指南与真实运行示例） |
 
 ## 当前进展
 
@@ -42,7 +44,8 @@
 - [x] 核实本机运行条件并选择可用后端（G0/R3 实测 + R1 短名单：路线 A foveacast ONNX CPU 先行；后端跑通验证属阶段 0 剩余工作）。
 - [x] 锁定公开数据评估协议（G0/R2：UEyes + 七指标统一口径；评估未运行；成功判据待一级总控确认）。
 - [x] 实现并测试工程管线（G1 验收通过：CLI 四命令、契约/AOI/概率统计/评估脚本/报告渲染三线交付，475 项测试通过，真实后端全链跑通）。
-- [ ] 评估模型适用性（公开数据基准 G2 待 UEyes 12.9GB 下载批准；游戏 UI 预测有效性在无眼动数据前保持未验证）。
-- [ ] 封装实际 Skill（G1 后启动）。
+- [x] 封装实际 Skill（G3 验收通过：skill/game-ui-attention/SKILL.md+调用指南+场景规则+真实运行示例，见 [docs/acceptance/g3-tool-delivery.md](docs/acceptance/g3-tool-delivery.md)；宿主运行时行为验证属使用侧）。
+- [ ] 公开数据基准评估（G2：评估脚本就绪且 S0 合成自检通过；UEyes 12.9GB 下载待一级总控批准）。
+- [ ] 评估模型在游戏 UI 上的适用性（无眼动数据前保持未验证）。
 
 文档创建日期：2026-09-11。来源核查日期见来源记录与各研究文档（均为 2026-09-11）；硬件环境已实测（R3），模型运行兼容性未实测。
