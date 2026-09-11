@@ -115,6 +115,7 @@ predict(image, resolved_profile) -> PredictionResult
   analysis.json       数值与运行证据
   regions.json        区域边界和来源
   density.npy        全精度空间概率图（支持该能力时）
+  base.png           原图展示副本（G1 补录：报告自包含用；哈希绑定仍以原始输入文件 sha256 为准）
   overlay.png        展示用热图
   report.html        查看、圈选区域、导出标注
   review.json        可选的 Agent 评审
