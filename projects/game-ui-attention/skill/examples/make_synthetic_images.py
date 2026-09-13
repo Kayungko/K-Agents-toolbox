@@ -86,7 +86,8 @@ def build(variant: bool) -> Image.Image:
 
     # 装饰光效带（id=deco-band）：变体减弱
     band = (120, 60, 150) if variant else (214, 110, 240)
-    draw.rectangle([320, 330, 639, 359], fill=band, outline=(240, 200, 255) if not variant else (150, 120, 170), width=1)
+    outline = (240, 200, 255) if not variant else (150, 120, 170)
+    draw.rectangle([320, 330, 639, 359], fill=band, outline=outline, width=1)
 
     # 领取按钮（id=claim-button）：变体放大 + 提亮（核心设计改动）
     if variant:
