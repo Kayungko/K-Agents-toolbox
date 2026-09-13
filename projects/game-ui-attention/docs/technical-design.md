@@ -46,8 +46,8 @@
 
 | 候选 | 定位（G0 锁定） | 当前限制 |
 | --- | --- | --- |
-| foveacast-training v0.2.0 ONNX（UI 微调 MSI-Net） | **首选后端候选**（D011）：3s FP16 主用，1s/7s 作窗口敏感性分析；onnxruntime CPU | 输出为逐图 min-max 相对量，适配层须重归一化后声明 probability_density；输入 240×320 上限，小元素解析力受限；训练分布不含游戏 UI（效果未验证）；商用前需关闭 G3/G4/G8 上游链缺口 |
-| DeepGaze IIE | 通用域对照基线（**仅限内部研究评估，不打包不分发**） | 许可缺口 G1 待一级总控裁决；老 API（torch.hub v0.6.0 tag、pretrained=）× 新 torch 兼容性未验证（U1），开工前隔离验证；4 骨干集成 CPU 延迟风险最高（U5） |
+| foveacast-training v0.2.0 ONNX（UI 微调 MSI-Net） | **正式主后端**（D011；G2 验收通过，S2 窗口匹配口径经用户批准 2026-09-12）：3s FP16 主用，1s/7s 作窗口敏感性分析；onnxruntime CPU | 输出为逐图 min-max 相对量，适配层须重归一化后声明 probability_density；输入 240×320 上限，小元素解析力受限；训练分布不含游戏 UI（效果未验证）；商用前需关闭 G3/G4/G8 上游链缺口 |
+| DeepGaze IIE | 通用域对照基线（**仅限内部研究评估，不打包不分发**；G1' 已批准 2026-09-11） | 许可缺口 G1/G2/G5 未闭合（如实登记于 profile）；U1 已消解（离线构建+strict=True 加载实证）；CPU 热推理 ~1s/图已实测可用 |
 | DeepGaze MSDB | 后续域适配观察项，暂缓 | 需要 pixel_per_dva 观看条件（不得从截图猜测）；10 尺度前向计算重；许可同 G1 |
 | UEyes 数据集 + R2 评估协议 | **公开评估基准**（D012），非后端 | 12.9GB 下载待一级总控批准；普通 UI 数据结果不得外推为游戏 UI 结论 |
 | SeekUI / UMSI++ | 存档不选（D013/D014） | SeekUI：scanpath 时序语义与静态热图接口不兼容 + 许可三层未闭合（G7）；UMSI++：无 LICENSE（G6）+ TF1.14/CUDA9 老栈 |

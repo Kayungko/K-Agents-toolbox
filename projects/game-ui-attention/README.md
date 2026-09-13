@@ -2,7 +2,7 @@
 
 游戏 UI 视觉注意力评估项目。拟定 Skill 名称：`game-ui-attention`；拟定 CLI 名称：`ui-attention`。
 
-**状态：G0-G3 四阶段全部验收（2026-09-11/12）——CLI+Skill 交付、535 项测试通过、UEyes 公开基准评估完成（验收记录：[G1](docs/acceptance/g1-engineering-loop.md)/[G2](docs/acceptance/g2-comparison.md)/[G3](docs/acceptance/g3-tool-delivery.md)）。核心实测：主候选 foveacast-3s 在原生窗口显著优于中心偏置基线（IG_CB +0.552，胜率 92.6%），UI 微调较通用域 DeepGaze 增量约 1.06 bits；S2 全窗口硬门槛口径修订待一级总控裁决。尚无安装包或发布物；游戏 UI 预测有效性未验证（无眼动数据）。**
+**状态：G0-G3 四阶段全部验收（2026-09-11/12）——CLI+Skill 交付、535 项测试通过、UEyes 公开基准评估完成（验收记录：[G1](docs/acceptance/g1-engineering-loop.md)/[G2](docs/acceptance/g2-comparison.md)/[G3](docs/acceptance/g3-tool-delivery.md)）。S2 口径经用户批准修订为窗口匹配（2026-09-12），**foveacast-onnx-3s-v1 确认为正式主后端**（原生窗口 IG_CB +0.552、胜率 92.6%，UI 微调较通用域 DeepGaze 增量约 1.06 bits）。尚无安装包或发布物；游戏 UI 预测有效性未验证（无眼动数据）。**
 
 ## 目标
 

@@ -30,6 +30,6 @@
 | C3 | 本地报告、区域导出、A/B 共用色阶、HTML 安全渲染 | src/ui_attention/report/ | **已验收**（110 单测+HTML 安全抽查，G1 记录） |
 | S1 | 原创 game-ui-attention Skill 封装 | skill/ | **已验收**（红线全覆盖+示例复跑数值逐字一致，G3 记录） |
 
-验收记录：[G1 工程闭环](../acceptance/g1-engineering-loop.md)、[G2 比较可信](../acceptance/g2-comparison.md)、[G3 工具交付](../acceptance/g3-tool-delivery.md)。G2 已于 2026-09-12 以 UEyes 真实数据执行完毕（一级总控批准下载+判据；S2 口径修订仍待裁决，判定按批准原文口径记录）。
+验收记录：[G1 工程闭环](../acceptance/g1-engineering-loop.md)、[G2 比较可信](../acceptance/g2-comparison.md)、[G3 工具交付](../acceptance/g3-tool-delivery.md)。G2 已于 2026-09-12 以 UEyes 真实数据执行完毕；S2 口径经用户批准修订为**窗口匹配**（2026-09-12），foveacast-onnx-3s-v1 通过硬门槛确认为正式主后端（批准原文口径判定如实保留为历史记录）。
 
-许可门禁不变：DeepGaze 线待一级总控 G1 裁决（C2 禁止安装 torch）；UEyes 12.9GB 下载待批准（C1 eval 以合成数据自测）；跨线整合与 tests/integration/ 由 L2 串行处理。
+许可与审批状态（2026-09-12 收口）：DeepGaze 仅内部评估对照已批准并实现（G1' 门禁落地于 profile/doctor）；UEyes 12.9GB 已批准下载并完成评估（md5 校验一致）；跨线整合与 tests/integration/ 已由 L2 完成（G1 记录）。存续前置项：商用前须关闭 G3/G4/G8；发布披露口径（G8）发布前确定。
