@@ -651,3 +651,134 @@ def test_build_split_comparison(tmp_path):
     assert (tmp_path / "fbk" / "comparison_official_vs_fallback.md").is_file()
     assert (tmp_path / "fbk" / "comparison_official_vs_fallback.json").is_file()
     del off, fbk
+
+
+# ---------------------------------------------------------------------------
+# S2 口径裁决落地（用户批准 2026-09-12）：window_matched / all_window 双口径 + 附录生成
+# ---------------------------------------------------------------------------
+
+
+def test_nominal_window_parsing():
+    windows = ("1s", "3s", "7s")
+    assert drv.nominal_window("foveacast-onnx-3s-v1", windows) == "3s"
+    assert drv.nominal_window("foveacast-onnx-1s-v1", windows) == "1s"
+    assert drv.nominal_window("foveacast-onnx-7s-v1", windows) == "7s"
+    assert drv.nominal_window("deepgaze-iie-v1", windows) is None  # 通用域无标称窗口
+    assert drv.nominal_window("fake-eval-v1", windows) is None
+
+
+def _b_entry(model, window, metric, ci_low, mean_diff=0.1):
+    return {
+        "model": model,
+        "baseline": "center_bias",
+        "window": window,
+        "metric": metric,
+        "mean_diff": mean_diff,
+        "ci_low": ci_low,
+        "ci_high": ci_low + 0.2,
+        "win_rate": 0.8,
+        "n_paired": 100,
+    }
+
+
+def test_judge_criteria_s2_dual_mode():
+    """window_matched：3s 模型只看 3s 窗（1s 交叉窗 fail 不影响门槛，标 sensitivity_only）；
+    all_window：同一数据 fail。无标称窗口模型两口径一致（全窗口）。"""
+    from ui_attention.metrics.eval.config import EvalConfig, SuccessCriteria
+
+    table_b = [
+        # foveacast-3s：标称窗口 3s 双指标过；交叉窗口 1s IG_CB 边际 fail
+        _b_entry("foveacast-onnx-3s-v1", "3s", "IG_CB", 0.47),
+        _b_entry("foveacast-onnx-3s-v1", "3s", "NSS", 0.54),
+        _b_entry("foveacast-onnx-3s-v1", "1s", "IG_CB", -0.05),
+        _b_entry("foveacast-onnx-3s-v1", "1s", "NSS", 0.19),
+        _b_entry("foveacast-onnx-3s-v1", "7s", "IG_CB", 0.28),
+        _b_entry("foveacast-onnx-3s-v1", "7s", "NSS", 0.43),
+        # deepgaze：无标称窗口，多窗口 fail
+        _b_entry("deepgaze-iie-v1", "1s", "IG_CB", -1.1),
+        _b_entry("deepgaze-iie-v1", "1s", "NSS", -0.58),
+        _b_entry("deepgaze-iie-v1", "3s", "IG_CB", -0.64),
+        _b_entry("deepgaze-iie-v1", "3s", "NSS", -0.32),
+        _b_entry("deepgaze-iie-v1", "7s", "IG_CB", -0.31),
+        _b_entry("deepgaze-iie-v1", "7s", "NSS", 0.003),
+    ]
+    cands = ["foveacast-onnx-3s-v1", "deepgaze-iie-v1"]
+    base = EvalConfig()
+
+    wm = drv.judge_criteria(config=base, table_b=table_b, candidates=cands, s0_report={"skipped": True})["S2"]
+    assert wm["s2_mode"] == "window_matched"
+    assert wm["models"]["foveacast-onnx-3s-v1"]["status"] == "pass"
+    assert wm["models"]["foveacast-onnx-3s-v1"]["gate_windows"] == ["3s"]
+    d = wm["models"]["foveacast-onnx-3s-v1"]["detail"]
+    assert d["1s/IG_CB"]["counts_toward_gate"] is False and d["1s/IG_CB"]["sensitivity_only"] is True
+    assert d["3s/IG_CB"]["counts_toward_gate"] is True and "sensitivity_only" not in d["3s/IG_CB"]
+    assert wm["models"]["deepgaze-iie-v1"]["status"] == "fail"  # 无标称窗口 → 全窗口判定
+    assert wm["models"]["deepgaze-iie-v1"]["gate_windows"] == ["1s", "3s", "7s"]
+
+    aw_cfg = EvalConfig(criteria=SuccessCriteria(s2_mode="all_window"))
+    aw = drv.judge_criteria(config=aw_cfg, table_b=table_b, candidates=cands, s0_report={"skipped": True})["S2"]
+    assert aw["s2_mode"] == "all_window"
+    assert aw["models"]["foveacast-onnx-3s-v1"]["status"] == "fail"  # 1s/IG_CB 拖垮旧口径
+    assert aw["models"]["foveacast-onnx-3s-v1"]["gate_windows"] == ["1s", "3s", "7s"]
+    assert aw["models"]["deepgaze-iie-v1"]["status"] == "fail"
+
+
+def test_load_per_image_csv_roundtrip(tmp_path):
+    from ui_attention.metrics.eval.config import EvalConfig
+
+    ds_root = tmp_path / "extracted"
+    make_ueyes_dataset(ds_root, n_participants=4, per_image_fixations=30, with_near_duplicate=False)
+    outputs = drv.run_full_evaluation(
+        dataset_root=ds_root,
+        out_root=tmp_path / "out",
+        config=EvalConfig(dataset="synthetic-ueyes", bootstrap_b=50, windows=("3s",)),
+        profiles=("fake-eval-v1",),
+        predictor_factory=_fake_predictor_factory,
+        dataset_name="synthetic-ueyes",
+        windows=("3s",),
+    )
+    csv_path = Path(outputs.csv_paths["3s"].split(" ")[0])
+    rows = drv.load_per_image_csv(csv_path)
+    assert len(rows) == 63  # 3 模型 × 3 test 图 × 7 指标
+    assert all(r.window == "3s" for r in rows)
+    assert {r.model for r in rows} == {"uniform", "center_bias", "fake-eval-v1"}
+
+
+def test_build_s2_addendum_end_to_end(tmp_path):
+    """附录生成：不重推理、只读 CSV、双口径并列、输入哈希与批准注记齐备。"""
+    from ui_attention.metrics.eval.config import EvalConfig
+
+    ds_root = tmp_path / "extracted"
+    make_ueyes_dataset(ds_root, n_participants=4, per_image_fixations=30, with_near_duplicate=False)
+    cfg = EvalConfig(dataset="synthetic-ueyes", bootstrap_b=100, windows=("1s", "3s", "7s"))
+    outputs = drv.run_full_evaluation(
+        dataset_root=ds_root,
+        out_root=tmp_path / "out",
+        config=cfg,
+        profiles=("fake-eval-v1",),
+        predictor_factory=_fake_predictor_factory,
+        dataset_name="synthetic-ueyes",
+    )
+    csvs = [Path(outputs.csv_paths[w].split(" ")[0]) for w in ("1s", "3s", "7s")]
+    out_file = tmp_path / "s2_window_matched_addendum.json"
+    add = drv.build_s2_addendum(official_csvs=csvs, out_path=out_file, fallback_csvs=csvs[:1], config=cfg)
+    assert out_file.is_file()
+    assert add["no_reinference"] is True
+    assert "用户批准 2026-09-12" in add["approval_note"]
+    assert add["bootstrap"] == {"B": 100, "seed": 20260911, "stratified": True, "ci": 0.95}
+    # 输入清单 + 哈希
+    assert len(add["inputs_official"]) == 3
+    assert all(len(i["sha256"]) == 64 and i["size_bytes"] > 0 for i in add["inputs_official"])
+    assert len(add["inputs_fallback"]) == 1
+    # 双口径并列（fake-eval-v1 无标称窗口 → 两口径判定集合一致）
+    s2 = add["official"]["s2"]
+    assert set(s2) == {"window_matched", "all_window"}
+    assert (
+        s2["window_matched"]["models"]["fake-eval-v1"]["status"] == s2["all_window"]["models"]["fake-eval-v1"]["status"]
+    )
+    assert s2["window_matched"]["models"]["fake-eval-v1"]["gate_windows"] == ["1s", "3s", "7s"]
+    assert add["fallback"]["descriptive_only"] is True
+    # 落盘内容可解析且与返回一致
+    on_disk = json.loads(out_file.read_text(encoding="utf-8"))
+    assert on_disk["schema"] == "game-ui-attention-s2-addendum/v1"
+    assert on_disk["official"]["n_rows"] == add["official"]["n_rows"] == 3 * 3 * 7 * 3

@@ -30,7 +30,7 @@ import json
 import re
 import sys
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1330,6 +1330,18 @@ def build_fingerprint(
     }
 
 
+def nominal_window(model_name: str, windows: Sequence[str]) -> str | None:
+    """解析模型标称/训练窗口：profile 名中的 ``-<window>-`` 段（如 foveacast-onnx-3s-v1 → '3s'）。
+
+    无标称窗口的通用域模型（如 deepgaze-iie-v1）返回 None →
+    window_matched 口径下退化为全窗口判定（用户批准 2026-09-12 口径的边界语义）。
+    """
+    for w in windows:
+        if f"-{w}-" in model_name or model_name.endswith(f"-{w}"):
+            return w
+    return None
+
+
 def judge_criteria(
     *,
     config: EvalConfig,
@@ -1339,8 +1351,12 @@ def judge_criteria(
 ) -> dict[str, Any]:
     """S0-S3 判定（S4 本轮不设，L1 批准口径）。
 
-    S2 为后端选型硬门槛：任一窗口 IG_CB/NSS 配对差值（vs CB）CI 下界 ≤ 0 →
-    该后端只能表述为"在公开 UI 数据上未显著优于中心偏置基线"（§8.3 失败动作）。
+    S2 为后端选型硬门槛，口径由 ``criteria.s2_mode`` 决定（用户批准 2026-09-12）：
+    - ``window_matched``（正式选型口径）：模型在其训练/标称窗口判定；交叉窗口单元格
+      保留为描述性敏感性记录（counts_toward_gate=False），不参与门槛；
+      无标称窗口模型退化为全窗口判定。
+    - ``all_window``（L1 2026-09-11 旧口径）：每窗口都须过，保留作敏感性对照。
+    未过门槛 → 只能表述为"在公开 UI 数据上未显著优于中心偏置基线"（§8.3 失败动作）。
     """
     crit = config.criteria
     verdicts: dict[str, Any] = {}
@@ -1379,29 +1395,55 @@ def judge_criteria(
         for cand in candidates:
             detail = {}
             ok_all = True
+            nw = nominal_window(cand, config.windows)
+            gate_windows = (nw,) if (crit.s2_mode == "window_matched" and nw is not None) else tuple(config.windows)
             for window in config.windows:
+                gated = window in gate_windows
                 for metric in crit.s2_metrics:
                     e = _look(cand, "center_bias", window, metric)
                     if e is None:
-                        ok_all = False
-                        detail[f"{window}/{metric}"] = "missing"
+                        if gated:
+                            ok_all = False
+                            detail[f"{window}/{metric}"] = "missing"
+                        else:
+                            detail[f"{window}/{metric}"] = {
+                                "missing": True,
+                                "counts_toward_gate": False,
+                                "sensitivity_only": True,
+                            }
                         continue
                     ok = e["ci_low"] > crit.s2_ci_lower_min
-                    ok_all &= ok
+                    if gated:
+                        ok_all &= ok
                     detail[f"{window}/{metric}"] = {
                         "mean_diff": e["mean_diff"],
                         "ci_low": e["ci_low"],
                         "win_rate": e["win_rate"],
                         "pass": ok,
+                        "counts_toward_gate": gated,
+                        **({} if gated else {"sensitivity_only": True}),
                     }
             per_model[cand] = {
                 "status": "pass" if ok_all else "fail",
+                "s2_mode": crit.s2_mode,
+                "nominal_window": nw,
+                "gate_windows": list(gate_windows),
                 "detail": detail,
                 "failure_wording": None
                 if ok_all
                 else "在公开 UI 数据上未显著优于中心偏置基线（不得宣称可用于游戏 UI 评审）",
             }
-        verdicts["S2"] = {"hard_gate": True, "models": per_model}
+        verdicts["S2"] = {
+            "hard_gate": True,
+            "s2_mode": crit.s2_mode,
+            "mode_note": (
+                "window_matched（用户批准 2026-09-12）：模型在其训练/标称窗口判定；"
+                "交叉窗口为描述性敏感性记录不参与门槛；无标称窗口模型退化为全窗口判定"
+                if crit.s2_mode == "window_matched"
+                else "all_window（L1 批准 2026-09-11 旧口径）：每窗口都须过；保留作敏感性对照"
+            ),
+            "models": per_model,
+        }
 
     if crit.s3_enabled:
         verdicts["S3"] = {
@@ -1412,6 +1454,109 @@ def judge_criteria(
         }
     verdicts["S4"] = {"status": "disabled", "note": "本轮不设（UMSI++ 不跑；作者报告值仅进独立文献参考表，不混表）"}
     return verdicts
+
+
+def load_per_image_csv(path: str | Path) -> list[Any]:
+    """读回逐图 CSV（§7.1 列序）为 PerImageRow 列表；空 value → NaN（排除行原样保留）。"""
+    from .pipeline import PerImageRow
+
+    rows: list[Any] = []
+    with open(path, newline="", encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            rows.append(
+                PerImageRow(
+                    dataset=r["dataset"],
+                    split=r["split"],
+                    window=r["window"],
+                    model=r["model"],
+                    model_version=r["model_version"],
+                    image_id=r["image_id"],
+                    category=r["category"],
+                    block=r["block"],
+                    n_viewers=int(r["n_viewers"]),
+                    n_fix=int(r["n_fix"]),
+                    excluded_flag=r["excluded_flag"],
+                    metric=r["metric"],
+                    value=float(r["value"]) if r["value"] != "" else float("nan"),
+                )
+            )
+    return rows
+
+
+def build_s2_addendum(
+    *,
+    official_csvs: Sequence[str | Path],
+    out_path: str | Path,
+    fallback_csvs: Sequence[str | Path] = (),
+    config: EvalConfig | None = None,
+    approval_note: str = (
+        "用户批准 2026-09-12：S2 正式选型口径修订为 window_matched"
+        "（模型在其训练/标称窗口判定；交叉窗口保留为描述性敏感性记录）。"
+        "all_window 为 L1 批准 2026-09-11 旧口径，并列输出作对照"
+    ),
+) -> dict[str, Any]:
+    """S2 口径裁决附录生成器（L2 微任务②）：**不重推理**。
+
+    从第 3 轮冻结的逐图 CSV 重算候选−CB 配对差值（bootstrap 与主运行同配置：
+    B=2000/种子 20260911/按类别分层），双口径（window_matched / all_window）并列
+    输出判定；冻结产物一律只读，附录为新增文件。
+
+    注：配对 CI 以逐图值按同配置重算（与主运行数字一致性由确定性保证）；Holm 范围
+    限本附录重算的候选×指标×窗口配对集合——门槛判定用 CI 下界，不受 Holm 影响。
+    """
+    config = config or EvalConfig()
+
+    def _inputs(paths: Sequence[str | Path]) -> list[dict[str, Any]]:
+        out = []
+        for p in paths:
+            p = Path(p)
+            data = p.read_bytes()
+            out.append({"path": str(p), "sha256": hashlib.sha256(data).hexdigest(), "size_bytes": len(data)})
+        return out
+
+    def _judge(csv_paths: Sequence[str | Path], variant: str, descriptive: bool) -> dict[str, Any]:
+        rows: list[Any] = []
+        for p in csv_paths:
+            rows += load_per_image_csv(p)
+        candidates = sorted({r.model for r in rows} - {"uniform", "center_bias"})
+        pairs = [(c, "center_bias", config.criteria.s2_metrics) for c in candidates]
+        table_b = aggregate_table_b(rows, config, pairs)
+        modes: dict[str, Any] = {}
+        for mode in ("window_matched", "all_window"):
+            cfg = replace(config, criteria=replace(config.criteria, s2_mode=mode))
+            verdicts = judge_criteria(config=cfg, table_b=table_b, candidates=candidates, s0_report={"skipped": True})
+            modes[mode] = verdicts["S2"]
+        return {
+            "variant": variant,
+            "descriptive_only": descriptive,
+            "candidates": candidates,
+            "n_rows": len(rows),
+            "s2": modes,
+        }
+
+    addendum: dict[str, Any] = {
+        "schema": "game-ui-attention-s2-addendum/v1",
+        "approval_note": approval_note,
+        "generated_at_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "no_reinference": True,
+        "source_runs": "第 3 轮终跑冻结产物（只读）；正式门槛判定以官方划分为准",
+        "bootstrap": {
+            "B": config.bootstrap_b,
+            "seed": config.bootstrap_seed,
+            "stratified": config.bootstrap_stratify_by_category,
+            "ci": config.ci_level,
+        },
+        "official": _judge(official_csvs, "official", descriptive=False),
+        "inputs_official": _inputs(official_csvs),
+        "note": "备选划分（fallback）与官方划分文件不同（§8.1 严格分表）：其判定仅描述性，不用于正式门槛",
+    }
+    if fallback_csvs:
+        addendum["fallback"] = _judge(fallback_csvs, "fallback-split", descriptive=True)
+        addendum["inputs_fallback"] = _inputs(fallback_csvs)
+    p = Path(out_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(addendum, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8", newline="\n")
+    return addendum
 
 
 # ---------------------------------------------------------------------------

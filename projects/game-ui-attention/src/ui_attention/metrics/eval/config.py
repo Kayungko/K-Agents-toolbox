@@ -50,11 +50,15 @@ class SuccessCriteria:
     s1_ci_lower_min: float = 0.0
     s1_metrics: tuple[str, ...] = ("NSS", "sAUC")
 
-    # S2 候选及格线（后端选型硬门槛）：每窗口 IG_CB 与 NSS 配对差值（vs CB）95% CI 下界 > 0；
-    # 任一窗口不达标 → 只能表述为"在公开 UI 数据上未显著优于中心偏置基线"。L1 批准启用。
+    # S2 候选及格线（后端选型硬门槛）：IG_CB 与 NSS 配对差值（vs CB）95% CI 下界 > 0。
+    # 口径修订（用户批准 2026-09-12）：正式选型口径 = window_matched——模型在其训练/标称
+    # 窗口判定；交叉窗口保留为描述性敏感性记录，不参与门槛。all_window 为旧口径
+    # （L1 批准 2026-09-11 的"每窗口"字面口径），保留作敏感性对照。
+    # 无标称窗口的模型（如 deepgaze-iie，通用域）在 window_matched 下退化为全窗口判定。
     s2_enabled: bool = True
     s2_ci_lower_min: float = 0.0
     s2_metrics: tuple[str, ...] = ("IG_CB", "NSS")
+    s2_mode: str = "window_matched"  # window_matched | all_window（用户批准 2026-09-12）
 
     # S3 跨域一致性（定性）。L1 批准启用；但 FiWI 不纳入（许可未核实，L1 批准口径）→
     # 本轮判定为 not_applicable（缺对照数据集，不判失败也不判通过）。
@@ -66,8 +70,14 @@ class SuccessCriteria:
 
     approval_note: str = (
         "S0-S4 按 R2 建议采纳：L1 批准 2026-09-11（全部批准）。S2 为后端选型硬门槛；"
-        "S3 因 FiWI 不纳入而 not_applicable；S4 本轮不设（UMSI++ 不跑，文献值仅进独立参考表不混表）"
+        "S3 因 FiWI 不纳入而 not_applicable；S4 本轮不设（UMSI++ 不跑，文献值仅进独立参考表不混表）。"
+        "S2 口径修订：用户批准 2026-09-12——正式选型口径为 window_matched（模型在其训练/标称窗口判定，"
+        "交叉窗口为描述性敏感性记录）；all_window 旧口径保留作对照"
     )
+
+    def __post_init__(self) -> None:
+        if self.s2_mode not in ("window_matched", "all_window"):
+            raise ValueError(f"s2_mode 必须是 window_matched|all_window，得到 {self.s2_mode!r}")
 
 
 @dataclass(frozen=True)

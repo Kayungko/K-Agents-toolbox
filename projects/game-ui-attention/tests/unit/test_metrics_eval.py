@@ -626,22 +626,28 @@ def test_s0_can_be_disabled_explicitly():
 
 
 def test_success_criteria_l1_approved_state():
-    """L1 批准 2026-09-11（全部批准）后的判据配置态（原"默认关闭待确认"测试按批准口径更新）。"""
+    """L1 批准 2026-09-11 + S2 口径修订（用户批准 2026-09-12）后的判据配置态。"""
     crit = EvalConfig().criteria
     assert crit.s0_enabled is True  # S0 管线自检门恒开
     # S1-S3 按 R2 建议值启用
     assert (crit.s1_enabled, crit.s2_enabled, crit.s3_enabled) == (True, True, True)
-    # S2 为后端选型硬门槛：每窗口 IG_CB 与 NSS 配对差值 vs CB 的 95% CI 下界 > 0
+    # S2 为后端选型硬门槛：口径 = window_matched（用户批准 2026-09-12 修订）
     assert crit.s2_metrics == ("IG_CB", "NSS")
     assert crit.s2_ci_lower_min == 0.0
+    assert crit.s2_mode == "window_matched"  # 正式选型口径：模型在其训练/标称窗口判定
     assert crit.s1_metrics == ("NSS", "sAUC")
     # S4 本轮不设（UMSI++ 不跑，仅文献参考表）：关闭且无定量阈值
     assert crit.s4_enabled is False
     assert crit.s4_ig_ratio_min is None
-    # 批准标注存在且可追溯
+    # 批准标注存在且可追溯（两轮批准都在案）
     assert "L1 批准 2026-09-11" in crit.approval_note
     assert "S2 为后端选型硬门槛" in crit.approval_note
+    assert "用户批准 2026-09-12" in crit.approval_note
+    assert "window_matched" in crit.approval_note
     assert "FiWI 不纳入" in crit.approval_note
+    # 非法 s2_mode 拒绝
+    with pytest.raises(ValueError):
+        SuccessCriteria(s2_mode="cherry_pick")
     # 冻结阈值与批准口径一致（近重复 Hamming≤8、注视<10、观看者<3）
     cfg = EvalConfig()
     assert (cfg.dup_hamming_max, cfg.min_fixations, cfg.min_viewers) == (8, 10, 3)
