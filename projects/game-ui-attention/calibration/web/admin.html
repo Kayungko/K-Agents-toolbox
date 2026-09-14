@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>校准平台 · 管理</title>
+<style>
+  :root { --fg:#1b1f27; --muted:#6b7280; --accent:#2f6feb; --line:#d8dde5; --bg:#f5f6f8; --danger:#b42318; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; color:var(--fg); background:var(--bg); margin:0; }
+  .stage { max-width: 980px; margin: 0 auto; padding: 24px 20px 60px; }
+  h1 { font-size: 20px; }
+  h2 { font-size: 16px; margin: 26px 0 8px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding: 16px 18px; margin-top:10px; }
+  .muted { color: var(--muted); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:10px 0; }
+  button { cursor:pointer; border:0; border-radius:8px; padding: 8px 14px; font-size: 14px; background:var(--accent); color:#fff; }
+  button.ghost { background:#fff; color:var(--accent); border:1px solid var(--accent); }
+  button.danger { background:#fff; color:var(--danger); border:1px solid #f0b9b3; }
+  button:disabled { background:#b8c4d8; cursor:not-allowed; }
+  input[type=text], input[type=password] { padding:8px 10px; font-size:14px; border:1px solid var(--line); border-radius:8px; }
+  input[type=text].wide { flex:1; min-width:240px; }
+  table { width:100%; border-collapse: collapse; font-size: 13px; margin-top:8px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  code { background:#eef1f5; padding:1px 5px; border-radius:4px; font-size:12px; word-break:break-all; }
+  .badge { display:inline-block; padding:1px 7px; border-radius:10px; font-size:12px; }
+  .badge.on { background:#e4f5ec; color:#12805c; }
+  .badge.off { background:#fbeae9; color:var(--danger); }
+  #status { font-size:13px; color:var(--muted); min-height:18px; }
+  #status.err { color:var(--danger); }
+  #status.ok { color:#12805c; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <h1>Game UI Attention · Web 校准平台管理</h1>
+  <p class="muted">内网-only：本页与所有 /admin/* 接口均需 admin token（启动时控制台打印或来自环境变量 CALIB_ADMIN_TOKEN）。</p>
+
+  <div class="card">
+    <div class="row">
+      <label>Admin Token：</label>
+      <input type="password" id="token" class="wide" placeholder="粘贴启动时打印的 admin token">
+    </div>
+  </div>
+
+  <h2>上传新设计稿（运行期热加，不重启）</h2>
+  <div class="card">
+    <div class="row">
+      <input type="file" id="upload-file" accept=".png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp">
+      <input type="text" id="upload-type" placeholder="screen_type（如 reward / shop，默认 unknown）">
+      <button id="btn-upload">上传并登记</button>
+    </div>
+  </div>
+
+  <h2>图库</h2>
+  <div class="card">
+    <button id="btn-tasks" class="ghost">刷新列表</button>
+    <div id="task-list"></div>
+  </div>
+
+  <h2>会话</h2>
+  <div class="card">
+    <div class="row">
+      <button id="btn-new-session">新建会话（发号）</button>
+      <button id="btn-sessions" class="ghost">刷新会话列表</button>
+    </div>
+    <div id="session-list"></div>
+  </div>
+
+  <h2>导出 responses</h2>
+  <div class="card">
+    <div class="row">
+      <button id="btn-export">下载全部 responses（JSON）</button>
+      <span class="muted">按 participant 拆分的 A1 同构导出请用 <code>python export_responses.py</code>。</span>
+    </div>
+  </div>
+
+  <h2>删除参与者（数据删除权）</h2>
+  <div class="card">
+    <div class="row">
+      <input type="text" id="del-pid" placeholder="participant_id（如 p01）">
+      <button id="btn-delete" class="danger">删除该人全部回传行</button>
+    </div>
+    <p class="muted">删除后需重新运行 <code>python export_responses.py</code> 再跑 consistency.py，报告即自动剔除该人。</p>
+  </div>
+
+  <p id="status"></p>
+</div>
+
+<script>
+"use strict";
+(function () {
+  function el(id) { return document.getElementById(id); }
+  function setStatus(msg, cls) {
+    var s = el("status");
+    s.textContent = msg;
+    s.className = cls || "";
+  }
+
+  function token() { return el("token").value.trim(); }
+
+  function api(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({ "X-Admin-Token": token() }, opts.headers || {});
+    return fetch(path, opts);
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function sessionLink(sid) {
+    return location.origin + "/s/" + sid;
+  }
+
+  // ---- 上传 ----
+  el("btn-upload").addEventListener("click", function () {
+    var file = el("upload-file").files[0];
+    if (!file) { setStatus("请先选择图片文件", "err"); return; }
+    var fd = new FormData();
+    fd.append("file", file);
+    fd.append("screen_type", el("upload-type").value.trim() || "unknown");
+    setStatus("上传中…");
+    api("/admin/tasks", { method: "POST", body: fd })
+      .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
+      .then(function (res) {
+        if (res.status !== 200) { setStatus("上传失败：" + JSON.stringify(res.body), "err"); return; }
+        setStatus("已登记：" + res.body.sha256.slice(0, 12) + "…（" + res.body.width + "×" + res.body.height + (res.body.already_existed ? "，已存在，已恢复 active" : "") + "）", "ok");
+        loadTasks();
+      })
+      .catch(function (e) { setStatus("上传失败：" + e.message, "err"); });
+  });
+
+  // ---- 图库 ----
+  el("btn-tasks").addEventListener("click", loadTasks);
+  function loadTasks() {
+    api("/admin/tasks").then(function (r) { return r.json(); }).then(function (j) {
+      var rows = j.tasks || [];
+      if (!rows.length) { el("task-list").innerHTML = '<p class="muted">图库为空。</p>'; return; }
+      var html = "<table><tr><th>sha256</th><th>文件</th><th>尺寸</th><th>类型</th><th>状态</th><th>加入时间</th><th></th></tr>";
+      rows.forEach(function (t) {
+        var badge = t.active ? '<span class="badge on">active</span>' : '<span class="badge off">retired</span>';
+        html += "<tr><td><code>" + esc(t.sha256.slice(0, 16)) + "…</code></td><td>" + esc(t.filename) + "</td><td>" + t.width + "×" + t.height + "</td><td>" + esc(t.screen_type) + "</td><td>" + badge + "</td><td>" + esc(t.added_at_utc) + "</td>";
+        html += "<td>" + (t.active ? '<button class="danger" onclick="retire(\'' + t.sha256 + '\')">下架</button>' : "") + "</td></tr>";
+      });
+      html += "</table>";
+      el("task-list").innerHTML = html;
+    }).catch(function (e) { setStatus("加载图库失败：" + e.message, "err"); });
+  }
+
+  window.retire = function (sha) {
+    if (!confirm("确认下架该图？soft-delete：仅置 active=false，不物理删除，历史 sha256 引用仍可解析。")) return;
+    api("/admin/tasks/" + sha + "/retire", { method: "POST" })
+      .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
+      .then(function (res) {
+        if (res.status !== 200) { setStatus("下架失败：" + JSON.stringify(res.body), "err"); return; }
+        setStatus("已下架 " + sha.slice(0, 12) + "…", "ok");
+        loadTasks();
+      })
+      .catch(function (e) { setStatus("下架失败：" + e.message, "err"); });
+  };
+
+  // ---- 会话 ----
+  el("btn-new-session").addEventListener("click", function () {
+    setStatus("发号中…");
+    api("/admin/sessions", { method: "POST" })
+      .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
+      .then(function (res) {
+        if (res.status !== 200) { setStatus("发号失败：" + JSON.stringify(res.body), "err"); return; }
+        setStatus("已发号：" + res.body.session_id.slice(0, 12) + "…（图 " + res.body.images.length + " 张）", "ok");
+        copyLink(res.body.session_id);
+        loadSessions();
+      })
+      .catch(function (e) { setStatus("发号失败：" + e.message, "err"); });
+  });
+
+  el("btn-sessions").addEventListener("click", loadSessions);
+  function loadSessions() {
+    api("/admin/sessions").then(function (r) { return r.json(); }).then(function (j) {
+      var rows = j.sessions || [];
+      if (!rows.length) { el("session-list").innerHTML = '<p class="muted">暂无会话。上传图片后即可发号。</p>'; return; }
+      var html = "<table><tr><th>会话</th><th>study_id</th><th>种子策略</th><th>种子</th><th>图数</th><th>创建时间</th><th></th></tr>";
+      rows.forEach(function (s) {
+        html += "<tr><td><code>" + esc(s.session_id.slice(0, 16)) + "…</code></td><td><code>" + esc(s.study_id) + "</code></td><td>" + esc(s.seed_strategy) + "</td><td>" + s.shuffle_seed + "</td><td>" + s.n_images + "</td><td>" + esc(s.created_at_utc) + "</td>";
+        html += '<td><button class="ghost" onclick="copyLink(\'' + s.session_id + '\')">复制标注链接</button></td></tr>';
+      });
+      html += "</table>";
+      el("session-list").innerHTML = html;
+    }).catch(function (e) { setStatus("加载会话失败：" + e.message, "err"); });
+  }
+
+  window.copyLink = function (sid) {
+    var link = sessionLink(sid);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(function () { setStatus("已复制：" + link, "ok"); });
+    } else {
+      setStatus("标注链接：" + link);
+    }
+  };
+
+  // ---- 导出 ----
+  el("btn-export").addEventListener("click", function () {
+    api("/admin/responses").then(function (r) { return r.json(); }).then(function (j) {
+      var blob = new Blob([JSON.stringify(j, null, 2)], { type: "application/json" });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "responses-export.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 3000);
+      setStatus("已下载 " + j.count + " 行（含 _server 信封；过滤后拆分请用 export_responses.py）", "ok");
+    }).catch(function (e) { setStatus("导出失败：" + e.message, "err"); });
+  });
+
+  // ---- 删除参与者 ----
+  el("btn-delete").addEventListener("click", function () {
+    var pid = el("del-pid").value.trim();
+    if (!pid) { setStatus("请输入 participant_id", "err"); return; }
+    if (!confirm("确认删除参与者 " + pid + " 的全部回传行？此操作不可逆。")) return;
+    api("/admin/participants/" + encodeURIComponent(pid), { method: "DELETE" })
+      .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
+      .then(function (res) {
+        if (res.status !== 200) { setStatus("删除失败：" + JSON.stringify(res.body), "err"); return; }
+        setStatus("已删除 " + res.body.removed_rows + " 行。", "ok");
+      })
+      .catch(function (e) { setStatus("删除失败：" + e.message, "err"); });
+  });
+
+  loadTasks();
+  loadSessions();
+})();
+</script>
+</body>
+</html>
